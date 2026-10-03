@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Calque</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root{
+    --ink:#0a0a0c;
+    --chrome:rgba(12,12,14,.82);
+    --edge:rgba(255,255,255,.14);
+    --paper:#f3efe6;
+    --paper-dim:rgba(243,239,230,.55);
+    --lock:#e8a33d;
+    --box:border-box;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+    color-scheme:dark;
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{height:100%;margin:0;overflow:hidden;background:var(--ink)}
+  body{
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+    color:var(--paper);
+    -webkit-user-select:none;user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    touch-action:none;
+  }
+
+  #stage{position:fixed;inset:0;overflow:hidden;background:#000}
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+
+  #layer{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+  #art{
+    max-width:none;transform-origin:center center;
+    will-change:transform;image-rendering:auto;
+  }
+  #art.hidden{display:none}
+
+  /* ---- chrome ---- */
+  .bar{
+    position:absolute;left:0;right:0;z-index:5;
+    display:flex;gap:8px;align-items:center;
+    padding:10px 12px;
+    transition:opacity .18s ease,transform .18s ease;
+  }
+  #top{top:0;padding-top:calc(10px + env(safe-area-inset-top,0px));justify-content:space-between}
+  body.bare .bar{opacity:0;pointer-events:none}
+  body.bare #peek{opacity:1;pointer-events:auto}
+
+  button{
+    font:inherit;font-size:13px;color:var(--paper);
+    background:var(--chrome);border:1px solid var(--edge);
+    border-radius:11px;padding:9px 13px;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    cursor:pointer;line-height:1;
+  }
+  button:active{background:rgba(40,40,46,.9)}
+  button:focus-visible{outline:2px solid var(--paper);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--paper);color:var(--ink);border-color:var(--paper)}
+  .icon{padding:9px 11px;font-size:15px}
+
+  #panel{
+    position:absolute;left:0;right:0;bottom:0;z-index:5;
+    padding:14px 14px calc(14px + env(safe-area-inset-bottom,0px));
+    background:linear-gradient(to top,rgba(10,10,12,.93),rgba(10,10,12,.7) 70%,transparent);
+    display:flex;flex-direction:column;gap:12px;
+    transition:opacity .18s ease;
+  }
+  body.bare #panel{opacity:0;pointer-events:none}
+
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .seg{display:flex;gap:4px;background:var(--chrome);border:1px solid var(--edge);border-radius:12px;padding:4px;backdrop-filter:blur(14px)}
+  .seg button{background:transparent;border:0;padding:8px 11px;border-radius:9px}
+
+  label.slider{display:flex;align-items:center;gap:11px;width:100%}
+  label.slider span{font-size:12px;color:var(--paper-dim);min-width:52px}
+  input[type=range]{
+    flex:1;-webkit-appearance:none;appearance:none;height:34px;background:transparent;
+  }
+  input[type=range]::-webkit-slider-runnable-track{height:3px;background:rgba(243,239,230,.28);border-radius:2px}
+  input[type=range]::-moz-range-track{height:3px;background:rgba(243,239,230,.28);border-radius:2px}
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:26px;height:26px;border-radius:50%;
+    background:var(--paper);margin-top:-11.5px;border:0;box-shadow:0 1px 6px rgba(0,0,0,.5)
+  }
+  input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;background:var(--paper);border:0}
+
+  /* ---- lock badge ---- */
+  #lockBtn[aria-pressed="true"]{background:var(--lock);color:#1a1205;border-color:var(--lock)}
+
+  /* ---- peek handle when chrome hidden ---- */
+  #peek{
+    position:absolute;z-index:6;right:12px;
+    bottom:calc(12px + env(safe-area-inset-bottom,0px));
+    opacity:0;pointer-events:none;transition:opacity .18s ease;
+  }
+
+  /* ---- empty / error ---- */
+  #intro{
+    position:absolute;inset:0;z-index:10;display:grid;place-items:center;
+    padding:28px;text-align:center;background:var(--ink);
+  }
+  #intro.gone{display:none}
+  #intro .wrap{max-width:30ch;display:flex;flex-direction:column;gap:18px;align-items:center}
+  #intro h1{
+    margin:0;font-size:34px;font-weight:400;letter-spacing:-.025em;line-height:1.05;
+  }
+  #intro p{margin:0;font-size:14.5px;line-height:1.55;color:var(--paper-dim)}
+  #intro .go{font-size:15px;padding:14px 22px;background:var(--paper);color:var(--ink);border-color:var(--paper)}
+  #err{color:#ff9a8a;font-size:13px;line-height:1.5;margin:0}
+  input[type=file]{display:none}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <div id="layer"><img id="art" alt=""></div>
+
+  <div class="bar" id="top">
+    <button class="icon" id="bareBtn" title="Masquer les réglages">◳</button>
+    <div class="row">
+      <button id="lockBtn" aria-pressed="false">Verrouiller</button>
+      <button class="icon" id="swapBtn" title="Changer d'image">⇄</button>
+    </div>
+  </div>
+
+  <button class="icon" id="peek">◳</button>
+
+  <div id="panel">
+    <label class="slider">
+      <span>Opacité</span>
+      <input type="range" id="op" min="5" max="100" value="45">
+    </label>
+    <div class="row">
+      <div class="seg" role="group" aria-label="Rendu de l'image">
+        <button data-mode="photo" aria-pressed="true">Photo</button>
+        <button data-mode="contrast" aria-pressed="false">Contraste</button>
+        <button data-mode="lines" aria-pressed="false">Contours</button>
+        <button data-mode="invert" aria-pressed="false">Négatif</button>
+      </div>
+      <button id="mirrorBtn" aria-pressed="false">Miroir</button>
+    </div>
+  </div>
+</div>
+
+<div id="intro">
+  <div class="wrap">
+    <h1>Pose ton dessin<br>sur la feuille</h1>
+    <p>Choisis une image, elle se superpose à la caméra. Tu décalques en regardant l'écran.</p>
+    <button class="go" id="pick">Choisir une image</button>
+    <p id="err" hidden></p>
+  </div>
+</div>
+
+<input type="file" id="file" accept="image/*">
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const cam = $('#cam'), art = $('#art'), file = $('#file'), intro = $('#intro'), err = $('#err');
+
+  // ---------- état de la transformation ----------
+  const T = { x:0, y:0, scale:1, rot:0 };
+  let mirrored = false, locked = false;
+  const apply = () => {
+    art.style.transform =
+      `translate(${T.x}px, ${T.y}px) rotate(${T.rot}deg) scale(${T.scale * (mirrored ? -1 : 1)}, ${T.scale})`;
+  };
+
+  // ---------- caméra ----------
+  async function startCam() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+        audio: false
+      });
+      cam.srcObject = stream;
+      await cam.play();
+      return true;
+    } catch (e) {
+      show(e.name === 'NotAllowedError'
+        ? "Accès caméra refusé. Autorise la caméra dans les réglages du site, puis recharge."
+        : "Caméra indisponible. Il faut une connexion HTTPS et, sur iPhone, Safari directement.");
+      return false;
+    }
+  }
+  function show(msg){ err.hidden = false; err.textContent = msg; }
+
+  // ---------- écran qui reste allumé ----------
+  let wl = null;
+  async function keepAwake() {
+    if (!('wakeLock' in navigator)) return;
+    try { wl = await navigator.wakeLock.request('screen'); } catch {}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !wl) keepAwake();
+  });
+
+  // ---------- détection de contours (Sobel) ----------
+  function makeEdges(img) {
+    const max = 1400;
+    const r = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * r), h = Math.round(img.naturalHeight * r);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    const src = ctx.getImageData(0, 0, w, h), d = src.data;
+    const g = new Float32Array(w * h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++)
+      g[p] = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+
+    const out = ctx.createImageData(w, h), o = out.data;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        const a=g[i-w-1],b=g[i-w],c2=g[i-w+1],e=g[i-1],f=g[i+1],
+              j=g[i+w-1],k=g[i+w],l=g[i+w+1];
+        const gx = (c2 + 2*f + l) - (a + 2*e + j);
+        const gy = (j + 2*k + l) - (a + 2*b + c2);
+        let m = Math.hypot(gx, gy) / 4;          // 0..~255
+        m = m < 28 ? 0 : Math.min(255, m * 1.8); // seuil + gain
+        const p = i * 4;
+        o[p] = o[p+1] = o[p+2] = 0;              // trait noir
+        o[p+3] = m;                              // alpha = force du contour
+      }
+    }
+    ctx.putImageData(out, 0, 0);
+    return c.toDataURL('image/png');
+  }
+
+  // ---------- chargement d'une image ----------
+  let srcPhoto = null, srcEdges = null, mode = 'photo';
+
+  function fit(img) {
+    const sw = innerWidth, sh = innerHeight;
+    const s = Math.min(sw / img.naturalWidth, sh / img.naturalHeight) * 0.85;
+    img.style.width = img.naturalWidth + 'px';
+    img.style.height = img.naturalHeight + 'px';
+    T.x = 0; T.y = 0; T.rot = 0; T.scale = s;
+    apply();
+  }
+
+  file.addEventListener('change', () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    const probe = new Image();
+    probe.onload = () => {
+      srcPhoto = url;
+      srcEdges = null;
+      art.src = url;
+      art.onload = () => { fit(art); intro.classList.add('gone'); };
+      setMode('photo');
+      // contours calculés en tâche de fond, prêts quand on clique dessus
+      setTimeout(() => { try { srcEdges = makeEdges(probe); } catch {} }, 60);
+    };
+    probe.onerror = () => show("Image illisible. Essaie un JPG ou un PNG.");
+    probe.src = url;
+  });
+
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll('[data-mode]').forEach(b =>
+      b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+    if (m === 'lines') {
+      if (srcEdges) art.src = srcEdges;
+      art.style.filter = 'none';
+    } else {
+      if (srcPhoto && art.src !== srcPhoto) art.src = srcPhoto;
+      art.style.filter =
+        m === 'contrast' ? 'grayscale(1) contrast(2.3) brightness(1.05)' :
+        m === 'invert'   ? 'invert(1) grayscale(1) contrast(1.4)' : 'none';
+    }
+  }
+  document.querySelectorAll('[data-mode]').forEach(b =>
+    b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+  // ---------- gestes : 1 doigt = déplacer, 2 doigts = zoom + rotation ----------
+  const pts = new Map();
+  let base = null;
+
+  const pair = () => {
+    const [a, b] = [...pts.values()];
+    return {
+      d: Math.hypot(b.x - a.x, b.y - a.y),
+      a: Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI,
+      cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2
+    };
+  };
+
+  const stage = $('#stage');
+  stage.addEventListener('pointerdown', e => {
+    if (locked || intro.classList.contains('gone') === false) return;
+    if (e.target.closest('.bar, #panel, #peek')) return;
+    stage.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    base = pts.size === 2 ? { ...pair(), scale: T.scale, rot: T.rot, x: T.x, y: T.y } : null;
+  });
+
+  stage.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId) || locked) return;
+    const prev = pts.get(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pts.size === 1) {
+      T.x += e.clientX - prev.x;
+      T.y += e.clientY - prev.y;
+      apply();
+    } else if (pts.size === 2 && base) {
+      const now = pair();
+      T.scale = Math.max(0.05, Math.min(14, base.scale * (now.d / base.d)));
+      T.rot = base.rot + (now.a - base.a);
+      T.x = base.x + (now.cx - base.cx);
+      T.y = base.y + (now.cy - base.cy);
+      apply();
+    }
+  });
+
+  const drop = e => {
+    pts.delete(e.pointerId);
+    base = pts.size === 2 ? { ...pair(), scale: T.scale, rot: T.rot, x: T.x, y: T.y } : null;
+  };
+  stage.addEventListener('pointerup', drop);
+  stage.addEventListener('pointercancel', drop);
+
+  // ---------- contrôles ----------
+  $('#op').addEventListener('input', e => { art.style.opacity = e.target.value / 100; });
+  art.style.opacity = 0.45;
+
+  $('#lockBtn').addEventListener('click', e => {
+    locked = !locked;
+    e.currentTarget.setAttribute('aria-pressed', String(locked));
+    e.currentTarget.textContent = locked ? 'Verrouillé' : 'Verrouiller';
+    pts.clear(); base = null;
+  });
+
+  $('#mirrorBtn').addEventListener('click', e => {
+    mirrored = !mirrored;
+    e.currentTarget.setAttribute('aria-pressed', String(mirrored));
+    apply();
+  });
+
+  const bare = on => document.body.classList.toggle('bare', on);
+  $('#bareBtn').addEventListener('click', () => bare(true));
+  $('#peek').addEventListener('click', () => bare(false));
+
+  $('#swapBtn').addEventListener('click', () => file.click());
+  $('#pick').addEventListener('click', async () => {
+    const ok = await startCam();
+    await keepAwake();
+    if (ok) file.click();
+  });
+
+  // Recadre si l'écran tourne
+  addEventListener('orientationchange', () => { if (art.src) setTimeout(() => fit(art), 300); });
+})();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
