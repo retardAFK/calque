@@ -38,8 +38,9 @@
   #stage{position:fixed;inset:0;overflow:hidden;background:#000}
   #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 
-  #layer{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+  #layer{position:absolute;inset:0;pointer-events:none}
   #art{
+    position:absolute;left:50%;top:50%;
     max-width:none;transform-origin:center center;
     will-change:transform;image-rendering:auto;
   }
@@ -56,15 +57,16 @@
   body.bare .bar{opacity:0;pointer-events:none}
   body.bare #peek{opacity:1;pointer-events:auto}
 
-  button{
+  button,label.btn{
     font:inherit;font-size:13px;color:var(--paper);
     background:var(--chrome);border:1px solid var(--edge);
     border-radius:11px;padding:9px 13px;
     backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
     cursor:pointer;line-height:1;
   }
-  button:active{background:rgba(40,40,46,.9)}
-  button:focus-visible{outline:2px solid var(--paper);outline-offset:2px}
+  label.btn{display:inline-block;-webkit-user-select:none;user-select:none}
+  button:active,label.btn:active{background:rgba(40,40,46,.9)}
+  button:focus-visible,label.btn:focus-visible{outline:2px solid var(--paper);outline-offset:2px}
   button[aria-pressed="true"]{background:var(--paper);color:var(--ink);border-color:var(--paper)}
   .icon{padding:9px 11px;font-size:15px}
 
@@ -80,6 +82,7 @@
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .seg{display:flex;gap:4px;background:var(--chrome);border:1px solid var(--edge);border-radius:12px;padding:4px;backdrop-filter:blur(14px)}
   .seg button{background:transparent;border:0;padding:8px 11px;border-radius:9px}
+  .seg button[aria-pressed="true"]{background:var(--paper);color:var(--ink)}
 
   label.slider{display:flex;align-items:center;gap:11px;width:100%}
   label.slider span{font-size:12px;color:var(--paper-dim);min-width:52px}
@@ -132,7 +135,7 @@
     <button class="icon" id="bareBtn" title="Masquer les réglages">◳</button>
     <div class="row">
       <button id="lockBtn" aria-pressed="false">Verrouiller</button>
-      <button class="icon" id="swapBtn" title="Changer d'image">⇄</button>
+      <label class="btn icon" id="swapBtn" for="file" role="button" tabindex="0" title="Changer d'image">⇄</label>
     </div>
   </div>
 
@@ -159,7 +162,7 @@
   <div class="wrap">
     <h1>Pose ton dessin<br>sur la feuille</h1>
     <p>Choisis une image, elle se superpose à la caméra. Tu décalques en regardant l'écran.</p>
-    <button class="go" id="pick">Choisir une image</button>
+    <label class="btn go" id="pick" for="file" role="button" tabindex="0">Choisir une image</label>
     <p id="err" hidden></p>
   </div>
 </div>
@@ -176,7 +179,7 @@
   let mirrored = false, locked = false;
   const apply = () => {
     art.style.transform =
-      `translate(${T.x}px, ${T.y}px) rotate(${T.rot}deg) scale(${T.scale * (mirrored ? -1 : 1)}, ${T.scale})`;
+      `translate(-50%, -50%) translate(${T.x}px, ${T.y}px) rotate(${T.rot}deg) scale(${T.scale * (mirrored ? -1 : 1)}, ${T.scale})`;
   };
 
   // ---------- caméra ----------
@@ -255,13 +258,21 @@
   file.addEventListener('change', () => {
     const f = file.files && file.files[0];
     if (!f) return;
+    file.value = ''; // pour pouvoir rechoisir la même image (ex. après un refus caméra)
     const url = URL.createObjectURL(f);
     const probe = new Image();
     probe.onload = () => {
       srcPhoto = url;
       srcEdges = null;
       art.src = url;
-      art.onload = () => { fit(art); intro.classList.add('gone'); };
+      art.onload = async () => {
+        art.onload = null;
+        fit(art);
+        if (!cam.srcObject && !(await startCam())) return;
+        err.hidden = true;
+        intro.classList.add('gone');
+        keepAwake();
+      };
       setMode('photo');
       // contours calculés en tâche de fond, prêts quand on clique dessus
       setTimeout(() => { try { srcEdges = makeEdges(probe); } catch {} }, 60);
@@ -356,12 +367,11 @@
   $('#bareBtn').addEventListener('click', () => bare(true));
   $('#peek').addEventListener('click', () => bare(false));
 
-  $('#swapBtn').addEventListener('click', () => file.click());
-  $('#pick').addEventListener('click', async () => {
-    const ok = await startCam();
-    await keepAwake();
-    if (ok) file.click();
-  });
+  // Clavier : Entrée/Espace sur les labels ouvrent le sélecteur (le clic natif du label suffit au tactile)
+  document.querySelectorAll('label[for=file]').forEach(l =>
+    l.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); l.click(); }
+    }));
 
   // Recadre si l'écran tourne
   addEventListener('orientationchange', () => { if (art.src) setTimeout(() => fit(art), 300); });
