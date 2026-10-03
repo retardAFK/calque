@@ -1,0 +1,87 @@
+import asyncio, subprocess, time, sys
+from playwright.async_api import async_playwright
+srv = subprocess.Popen([sys.executable,"-m","http.server","8765","-d","."],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+time.sleep(1)
+URL="http://localhost:8765/"
+ok=lambda c,m: print(("✅ " if c else "❌ ")+m) or c
+results=[]
+async def ctx_page(b, delay=6000, deny=False):
+    ctx = await b.new_context(viewport={"width":390,"height":844}, has_touch=True, is_mobile=True)
+    if not deny: await ctx.grant_permissions(["camera"], origin=URL.rstrip('/'))
+    page = await ctx.new_page()
+    errs=[]; page.on("pageerror", lambda e: errs.append(str(e)))
+    page.on("console", lambda m: m.type=="error" and errs.append(m.text))
+    js = ("navigator.mediaDevices.getUserMedia = () => new Promise((_,j)=>setTimeout(()=>j(new DOMException('no','NotAllowedError')),%d));" % delay) if deny else \
+         ("const real=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices); navigator.mediaDevices.getUserMedia=c=>new Promise(r=>setTimeout(()=>r(real(c)),%d));" % delay)
+    js += " const _c=navigator.mediaDevices.getUserMedia; window.__gum=0; navigator.mediaDevices.getUserMedia=c=>{window.__gum++; return _c.call(navigator.mediaDevices,c)};"
+    await page.add_init_script(js)
+    await page.goto(URL); return ctx, page, errs
+
+async def main():
+    async with async_playwright() as p:
+        b = await p.chromium.launch(args=["--use-fake-device-for-media-stream","--use-fake-ui-for-media-stream"])
+        ctx,page,errs = await ctx_page(b)
+        t=time.time()
+        try:
+            async with page.expect_file_chooser(timeout=1500) as fc: await page.tap("#pick")
+            chooser = await fc.value; opened=True
+        except Exception: opened=False
+        results.append(ok(opened, f"Sélecteur ouvert immédiatement au tap ({(time.time()-t)*1000:.0f} ms)"))
+        if opened:
+            g = await page.evaluate("window.__gum")
+            results.append(ok(g==0, f"Caméra pas demandée avant le choix de l'image ({g} appel(s))"))
+            await chooser.set_files("tests/chat.png")
+            await page.wait_for_function("document.querySelector('#intro').classList.contains('gone')", timeout=10000)
+            results.append(ok(True, "Image choisie, popup caméra lente (6 s) → l'appli démarre quand même"))
+            vs = await page.evaluate("[cam.readyState, cam.videoWidth]")
+            results.append(ok(vs[0]>=2 and vs[1]>0, f"Flux caméra actif (readyState {vs[0]}, {vs[1]}px)"))
+            nw = await page.evaluate("art.naturalWidth")
+            results.append(ok(nw==800, f"Image affichée par-dessus ({nw}px)"))
+            await page.screenshot(path="tests/test_photo.png")
+            bx = await page.evaluate("(()=>{const r=art.getBoundingClientRect();return [r.left+r.width/2, r.top+r.height/2, r.width]})()")
+            results.append(ok(abs(bx[0]-195)<3 and abs(bx[1]-422)<3, f"Image centrée à l'écran (centre {bx[0]:.0f},{bx[1]:.0f})"))
+            results.append(ok(bx[2] <= 390, f"Image entière visible ({bx[2]:.0f}px de large)"))
+
+            await page.wait_for_timeout(800)
+            await page.tap('[data-mode="lines"]'); await page.wait_for_timeout(300)
+            src = await page.evaluate("art.src.slice(0,22)")
+            sty = await page.evaluate("(()=>{const c=getComputedStyle(document.querySelector('[data-mode=lines]'));return [c.backgroundColor,c.color]})()")
+            results.append(ok(sty[0]!=sty[1] and 'rgba(0, 0, 0, 0)' not in sty[0], f"Bouton actif lisible (fond {sty[0]}, texte {sty[1]})"))
+            results.append(ok(src.startswith("data:image/png"), "Mode Contours : image de contours générée"))
+            await page.screenshot(path="tests/test_contours.png")
+
+            before = await page.evaluate("art.style.transform")
+            await page.mouse.move(195,420); await page.mouse.down(); await page.mouse.move(255,470,steps=5); await page.mouse.up()
+            after = await page.evaluate("art.style.transform")
+            results.append(ok(before!=after, "Glisser déplace l'image"))
+
+            await page.tap("#lockBtn")
+            before = after
+            await page.mouse.move(195,420); await page.mouse.down(); await page.mouse.move(100,300,steps=5); await page.mouse.up()
+            after = await page.evaluate("art.style.transform")
+            results.append(ok(before==after, "Verrouillé : l'image ne bouge plus"))
+
+            await page.fill("#op","80"); await page.dispatch_event("#op","input")
+            results.append(ok(await page.evaluate("art.style.opacity")=="0.8", "Curseur d'opacité"))
+
+            try:
+                async with page.expect_file_chooser(timeout=1500) as fc2: await page.tap("#swapBtn")
+                await (await fc2.value).set_files("tests/chat.png"); sw=True
+            except Exception: sw=False
+            results.append(ok(sw, "Bouton changer d'image ouvre le sélecteur"))
+            await page.wait_for_timeout(1500)
+            swr = await page.evaluate("navigator.serviceWorker.controller !== null || navigator.serviceWorker.getRegistration().then(r=>!!r)")
+            results.append(ok(swr, "Service worker enregistré (installable)"))
+        results.append(ok(not errs, "Aucune erreur JS" + ("" if not errs else f" : {errs}")))
+        await ctx.close()
+
+        ctx,page,errs = await ctx_page(b, delay=300, deny=True)
+        async with page.expect_file_chooser(timeout=1500) as fc: await page.tap("#pick")
+        await (await fc.value).set_files("tests/chat.png")
+        await page.wait_for_timeout(800)
+        st = await page.evaluate("[document.querySelector('#intro').classList.contains('gone'), err.hidden, err.textContent]")
+        results.append(ok(not st[0] and not st[1], f"Caméra refusée → message clair : « {st[2][:50]}… »"))
+        await page.screenshot(path="tests/test_refus.png")
+        await b.close()
+    print(f"\n{sum(results)}/{len(results)} tests OK")
+asyncio.run(main()); srv.terminate()
