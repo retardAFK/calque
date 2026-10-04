@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#0a0a0c">
+<meta name="theme-color" content="#111111">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -12,29 +12,35 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
 <style>
+  @font-face{font-family:"Bricolage Grotesque";font-weight:500;font-display:swap;src:url(fonts/bricolage-grotesque-latin-500-normal.woff2) format("woff2")}
+  @font-face{font-family:"Bricolage Grotesque";font-weight:800;font-display:swap;src:url(fonts/bricolage-grotesque-latin-800-normal.woff2) format("woff2")}
+  @font-face{font-family:"Space Mono";font-weight:400;font-display:swap;src:url(fonts/space-mono-latin-400-normal.woff2) format("woff2")}
+  @font-face{font-family:"Space Mono";font-weight:700;font-display:swap;src:url(fonts/space-mono-latin-700-normal.woff2) format("woff2")}
+
   :root{
-    --ink:#0a0a0c;
-    --chrome:rgba(12,12,14,.82);
-    --edge:rgba(255,255,255,.14);
-    --paper:#f3efe6;
-    --paper-dim:rgba(243,239,230,.55);
-    --lock:#e8a33d;
-    --box:border-box;
-    box-sizing:border-box;
-    padding-top:env(safe-area-inset-top,0px);
-    padding-bottom:env(safe-area-inset-bottom,0px);
-    color-scheme:dark;
+    --paper:#ECEAE4;     /* fond des panneaux */
+    --ink:#111111;       /* texte, bordures */
+    --pink:#FF4F9A;      /* accent principal : texte noir dessus */
+    --blue:#2C4BD8;      /* accent secondaire : texte blanc dessus */
+    --white:#FFFFFF;     /* cartes */
+    --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+    --mono:"Space Mono",ui-monospace,monospace;
+    --line:2px solid var(--ink);
+    --side:min(300px,45vw);  /* panneau latéral en paysage */
+    color-scheme:light;
   }
   *,*::before,*::after{box-sizing:border-box}
+  [hidden]{display:none!important}
   html,body{height:100%;margin:0;overflow:hidden;background:var(--ink)}
   body{
-    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
-    color:var(--paper);
+    font-family:var(--display);font-weight:500;color:var(--ink);
     -webkit-user-select:none;user-select:none;
     -webkit-tap-highlight-color:transparent;
     touch-action:none;
   }
+  .tag{font:400 12px/1.3 var(--mono);text-transform:uppercase;letter-spacing:.08em}
 
+  /* ---------- scène : caméra + modèle ---------- */
   #stage{position:fixed;inset:0;overflow:hidden;background:#000}
   #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
   /* jamais de bouton lecture/pause natif par-dessus la caméra (Chrome Android) */
@@ -52,7 +58,7 @@
   /* grille de report : mêmes dimensions et même transformation que l'image */
   #grid{
     position:absolute;left:50%;top:50%;transform-origin:center center;
-    --gc:rgba(255,40,90,.85);
+    --gc:rgba(44,75,216,.9);
     background-image:
       linear-gradient(to right,var(--gc) var(--gw,1px),transparent var(--gw,1px)),
       linear-gradient(to bottom,var(--gc) var(--gw,1px),transparent var(--gw,1px));
@@ -60,81 +66,130 @@
     box-shadow:inset calc(-1 * var(--gw,1px)) calc(-1 * var(--gw,1px)) 0 var(--gc);
   }
 
-  /* ---- chrome ---- */
+  /* ---------- boutons : angles droits, bordure noire 2px, 44px minimum ---------- */
+  button,label.btn{
+    font:500 15px/1 var(--display);color:var(--ink);
+    background:var(--paper);border:var(--line);border-radius:0;
+    min-width:44px;min-height:44px;padding:0 14px;
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    flex:0 0 auto;cursor:pointer;-webkit-user-select:none;user-select:none;
+  }
+  button:active,label.btn:active{transform:translate(2px,2px)}
+  button:focus-visible,label.btn:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+  .sq,label.btn.sq{width:44px;height:44px;padding:0}
+  svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:square;stroke-linejoin:miter}
+  /* actifs : rose (texte noir) pour le rendu et le verrou, bleu (texte blanc) pour les options */
+  .seg button[aria-pressed="true"],#lockBtn[aria-pressed="true"]{background:var(--pink);color:var(--ink)}
+  .tools button[aria-pressed="true"]{background:var(--blue);color:var(--white)}
+  #lockBtn .closed,#lockBtn[aria-pressed="true"] .open{display:none}
+  #lockBtn[aria-pressed="true"] .closed{display:block}
+
+  /* ---------- barre du haut : carrés bordés de noir ---------- */
   .bar{
     position:absolute;left:0;right:0;z-index:5;
     display:flex;gap:8px;align-items:center;
-    padding:10px 12px;
-    transition:opacity .18s ease,transform .18s ease;
+    transition:opacity .18s ease;
   }
-  #top{top:0;padding-top:calc(10px + env(safe-area-inset-top,0px));justify-content:space-between}
-  body.bare .bar{opacity:0;pointer-events:none}
+  #top{top:0;justify-content:space-between;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px}
+  #top .row{display:flex;gap:8px}
+  body.bare .bar,body.bare #panel{opacity:0;pointer-events:none}
   body.bare #peek{opacity:1;pointer-events:auto}
 
-  button,label.btn{
-    font:inherit;font-size:13px;color:var(--paper);
-    background:var(--chrome);border:1px solid var(--edge);
-    border-radius:11px;padding:9px 13px;
-    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-    cursor:pointer;line-height:1;
-  }
-  label.btn{display:inline-block;-webkit-user-select:none;user-select:none}
-  button:active,label.btn:active{background:rgba(40,40,46,.9)}
-  button:focus-visible,label.btn:focus-visible{outline:2px solid var(--paper);outline-offset:2px}
-  button[aria-pressed="true"]{background:var(--paper);color:var(--ink);border-color:var(--paper)}
-  .icon{padding:9px 11px;font-size:15px}
-
+  /* ---------- panneau du bas ---------- */
   #panel{
     position:absolute;left:0;right:0;bottom:0;z-index:5;
-    padding:14px 14px calc(14px + env(safe-area-inset-bottom,0px));
-    background:linear-gradient(to top,rgba(10,10,12,.93),rgba(10,10,12,.7) 70%,transparent);
+    background:var(--paper);border-top:var(--line);
+    padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));
     display:flex;flex-direction:column;gap:12px;
     transition:opacity .18s ease;
   }
-  body.bare #panel{opacity:0;pointer-events:none}
-
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .seg{display:flex;gap:4px;background:var(--chrome);border:1px solid var(--edge);border-radius:12px;padding:4px;backdrop-filter:blur(14px)}
-  .seg button{background:transparent;border:0;padding:8px 11px;border-radius:9px}
-  .seg button[aria-pressed="true"]{background:var(--paper);color:var(--ink)}
-
-  label.slider{display:flex;align-items:center;gap:11px;width:100%}
-  label.slider span{font-size:12px;color:var(--paper-dim);min-width:52px}
-  input[type=range]{
-    flex:1;-webkit-appearance:none;appearance:none;height:34px;background:transparent;
-  }
-  input[type=range]::-webkit-slider-runnable-track{height:3px;background:rgba(243,239,230,.28);border-radius:2px}
-  input[type=range]::-moz-range-track{height:3px;background:rgba(243,239,230,.28);border-radius:2px}
+  .opa{display:flex;align-items:center;gap:12px}
+  .opa .tag{min-width:62px}
+  #opv::after{content:"%";font-weight:500;font-size:13px;margin-left:1px}
+  #opv{font:800 18px/1 var(--display);min-width:4.2ch;text-align:right;font-variant-numeric:tabular-nums}
+  .tools{display:flex;flex-wrap:wrap;gap:6px}
+  /* rendus : boutons accolés, bordures partagées */
+  .seg{display:flex;flex-wrap:wrap}
+  .seg button{padding:0 11px;font-size:14px}
+  .seg button+button{margin-left:-2px}
+  input[type=range]{flex:1;min-width:0;height:44px;margin:0;-webkit-appearance:none;appearance:none;background:transparent}
+  input[type=range]::-webkit-slider-runnable-track{height:4px;background:var(--ink)}
+  input[type=range]::-moz-range-track{height:4px;background:var(--ink)}
   input[type=range]::-webkit-slider-thumb{
-    -webkit-appearance:none;width:26px;height:26px;border-radius:50%;
-    background:var(--paper);margin-top:-11.5px;border:0;box-shadow:0 1px 6px rgba(0,0,0,.5)
+    -webkit-appearance:none;width:24px;height:24px;margin-top:-10px;
+    background:var(--pink);border:var(--line);border-radius:0;
   }
-  input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;background:var(--paper);border:0}
+  input[type=range]::-moz-range-thumb{width:24px;height:24px;background:var(--pink);border:var(--line);border-radius:0}
 
-  /* ---- lock badge ---- */
-  #lockBtn[aria-pressed="true"]{background:var(--lock);color:#1a1205;border-color:var(--lock)}
-
-  /* ---- peek handle when chrome hidden ---- */
   #peek{
-    position:absolute;z-index:6;right:12px;
-    bottom:calc(12px + env(safe-area-inset-bottom,0px));
+    position:absolute;z-index:6;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));
+    box-shadow:6px 6px 0 var(--pink);
     opacity:0;pointer-events:none;transition:opacity .18s ease;
   }
 
-  /* ---- empty / error ---- */
+  /* ---------- accueil ---------- */
   #intro{
-    position:absolute;inset:0;z-index:10;display:grid;place-items:center;
-    padding:28px;text-align:center;background:var(--ink);
+    position:absolute;inset:0;z-index:10;display:flex;overflow:auto;
+    background:var(--paper);color:var(--ink);
+    padding:calc(28px + env(safe-area-inset-top,0px)) 24px calc(28px + env(safe-area-inset-bottom,0px));
   }
   #intro.gone{display:none}
-  #intro .wrap{max-width:30ch;display:flex;flex-direction:column;gap:18px;align-items:center}
+  #intro .wrap{margin:auto 0;width:100%;max-width:560px;display:flex;flex-direction:column;gap:26px}
   #intro h1{
-    margin:0;font-size:34px;font-weight:400;letter-spacing:-.025em;line-height:1.05;
+    margin:0;font:800 clamp(56px,17vw,148px)/.86 var(--display);letter-spacing:-.035em;
+    text-shadow:3px 2px 0 rgba(44,75,216,.55);   /* mauvais repérage riso */
   }
-  #intro p{margin:0;font-size:14.5px;line-height:1.55;color:var(--paper-dim)}
-  #intro .go{font-size:15px;padding:14px 22px;background:var(--paper);color:var(--ink);border-color:var(--paper)}
-  #err{color:#ff9a8a;font-size:13px;line-height:1.5;margin:0}
+  #intro .side{display:flex;flex-direction:column;align-items:flex-start;gap:20px}
+  #intro .sub{margin:0;max-width:36ch;line-height:1.65;font-size:13px}
+  #intro .go{
+    background:var(--ink);color:var(--paper);font-weight:800;font-size:18px;
+    min-height:56px;padding:0 24px;box-shadow:6px 6px 0 var(--pink);
+  }
+  .ticket{
+    flex-direction:column;align-items:flex-start;gap:6px;text-align:left;
+    width:min(100%,340px);padding:14px 16px;
+    background:var(--white);border:2px dashed var(--ink);box-shadow:6px 6px 0 var(--blue);
+  }
+  .ticket strong{font:800 20px/1.1 var(--display)}
+  #err{
+    margin:0;padding:10px 12px;max-width:40ch;line-height:1.5;
+    background:var(--white);border:var(--line);box-shadow:6px 6px 0 var(--blue);
+  }
+  #intro .foot{margin:0;font-size:11px}
   input[type=file]{display:none}
+
+  /* ---------- téléphone en paysage : panneau à droite en colonne, barre réduite ---------- */
+  @media (orientation:landscape) and (max-height:767px){
+    #layer{right:var(--side)}   /* l'image se centre dans la zone libre */
+    #top{right:var(--side);padding:calc(8px + env(safe-area-inset-top,0px)) 10px 8px calc(10px + env(safe-area-inset-left,0px))}
+    #panel{
+      top:0;left:auto;width:var(--side);border-top:0;border-left:var(--line);
+      overflow-y:auto;gap:10px;
+      padding:calc(10px + env(safe-area-inset-top,0px)) calc(14px + env(safe-area-inset-right,0px)) 10px 14px;
+    }
+    .seg{gap:6px}
+    .seg button+button{margin-left:0}
+    #intro .wrap{max-width:none;flex-direction:row;align-items:center;gap:36px}
+    #intro h1{font-size:min(17vw,20vh,96px);flex:0 0 auto}
+    #intro .side{gap:16px}
+  }
+
+  /* ---------- tablette : panneau en carte flottante ---------- */
+  @media (min-width:768px) and (min-height:768px){
+    #top{padding:calc(20px + env(safe-area-inset-top,0px)) 24px 20px}
+    #panel{
+      left:0;right:0;margin:0 auto;bottom:calc(24px + env(safe-area-inset-bottom,0px));
+      width:min(420px,calc(100% - 48px));
+      border:var(--line);box-shadow:6px 6px 0 var(--pink);padding:18px;
+    }
+    #peek{right:24px;bottom:calc(24px + env(safe-area-inset-bottom,0px))}
+    #intro{padding:48px}
+    #intro .wrap{max-width:760px;margin:auto}
+    #intro .sub{font-size:14px}
+  }
+  @media (min-width:768px) and (min-height:768px) and (orientation:landscape){
+    #panel{left:auto;right:24px;margin:0}
+  }
 
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -146,27 +201,37 @@
   <div id="layer"><img id="art" alt=""><div id="grid" hidden></div></div>
 
   <div class="bar" id="top">
-    <button class="icon" id="bareBtn" title="Masquer les réglages">◳</button>
+    <button class="sq" id="bareBtn" title="Masquer les réglages" aria-label="Masquer les réglages">
+      <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M3 15h18"/></svg>
+    </button>
     <div class="row">
-      <button id="lockBtn" aria-pressed="false">Verrouiller</button>
-      <label class="btn icon" id="swapBtn" for="file" role="button" tabindex="0" title="Changer d'image">⇄</label>
+      <button class="sq" id="lockBtn" aria-pressed="false" title="Verrouiller l'image" aria-label="Verrouiller l'image">
+        <svg class="i open" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
+        <svg class="i closed" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      </button>
+      <label class="btn sq" id="swapBtn" for="file" role="button" tabindex="0" title="Changer d'image" aria-label="Changer d'image">
+        <svg class="i" viewBox="0 0 24 24"><path d="M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4"/></svg>
+      </label>
     </div>
   </div>
 
-  <button class="icon" id="peek">◳</button>
+  <button class="sq" id="peek" title="Afficher les réglages" aria-label="Afficher les réglages">
+    <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M3 15h18"/></svg>
+  </button>
 
   <div id="panel">
-    <label class="slider">
-      <span>Opacité</span>
+    <div class="opa">
+      <label class="tag" for="op">Opacité</label>
       <input type="range" id="op" min="5" max="100" value="45">
-    </label>
-    <div class="row">
-      <div class="seg" role="group" aria-label="Rendu de l'image">
-        <button data-mode="photo" aria-pressed="true">Photo</button>
-        <button data-mode="contrast" aria-pressed="false">Contraste</button>
-        <button data-mode="lines" aria-pressed="false">Contours</button>
-        <button data-mode="invert" aria-pressed="false">Négatif</button>
-      </div>
+      <output id="opv" for="op">45</output>
+    </div>
+    <div class="seg" role="group" aria-label="Rendu de l'image">
+      <button data-mode="photo" aria-pressed="true">Photo</button>
+      <button data-mode="contrast" aria-pressed="false">Contraste</button>
+      <button data-mode="lines" aria-pressed="false">Contours</button>
+      <button data-mode="invert" aria-pressed="false">Négatif</button>
+    </div>
+    <div class="tools" role="group" aria-label="Options">
       <button id="mirrorBtn" aria-pressed="false">Miroir</button>
       <button id="gridBtn" aria-pressed="false">Grille</button>
       <button id="torchBtn" aria-pressed="false" hidden>Lampe</button>
@@ -177,10 +242,17 @@
 
 <div id="intro">
   <div class="wrap">
-    <h1>Pose ton dessin<br>sur la feuille</h1>
-    <p>Choisis une image, elle se superpose à la caméra. Tu décalques en regardant l'écran.</p>
-    <label class="btn go" id="pick" for="file" role="button" tabindex="0">Choisir une image</label>
-    <p id="err" hidden></p>
+    <h1>DÉCALQUE<br>TOUT.</h1>
+    <div class="side">
+      <p class="sub tag">Choisis une image, elle se superpose à la caméra. Tu décalques en regardant l'écran.</p>
+      <label class="btn go" id="pick" for="file" role="button" tabindex="0">Choisir une image →</label>
+      <button class="ticket" id="resume" hidden>
+        <span class="tag">Reprendre</span>
+        <strong>Ton dernier calque</strong>
+      </button>
+      <p id="err" class="tag" hidden></p>
+      <p class="foot tag">Rien ne quitte ton téléphone.</p>
+    </div>
   </div>
 </div>
 
@@ -302,7 +374,7 @@
         let m = Math.hypot(gx, gy) / 4;          // 0..~255
         m = m < 28 ? 0 : Math.min(255, m * 1.8); // seuil + gain
         const p = i * 4;
-        o[p] = o[p+1] = o[p+2] = 0;              // trait noir
+        o[p] = 255; o[p+1] = 79; o[p+2] = 154;   // trait rose riso (--pink)
         o[p+3] = m;                              // alpha = force du contour
       }
     }
@@ -314,7 +386,7 @@
   let srcPhoto = null, srcEdges = null, mode = 'photo';
 
   function fit(img) {
-    const sw = innerWidth, sh = innerHeight;
+    const L = $('#layer'), sw = L.clientWidth, sh = L.clientHeight;
     const s = Math.min(sw / img.naturalWidth, sh / img.naturalHeight) * 0.85;
     img.style.width = img.naturalWidth + 'px';
     img.style.height = img.naturalHeight + 'px';
@@ -389,7 +461,8 @@
   const stage = $('#stage');
   const peeking = () => stage.classList.contains('peek');
   const onArt = (x, y) => {          // point écran -> repère de l'image (inverse de apply())
-    const dx = x - (innerWidth / 2 + T.x), dy = y - (innerHeight / 2 + T.y);
+    const L = $('#layer').getBoundingClientRect();
+    const dx = x - (L.left + L.width / 2 + T.x), dy = y - (L.top + L.height / 2 + T.y);
     const r = -T.rot * Math.PI / 180;
     const u = (dx * Math.cos(r) - dy * Math.sin(r)) / T.scale;
     const v = (dx * Math.sin(r) + dy * Math.cos(r)) / T.scale;
@@ -445,13 +518,14 @@
   stage.addEventListener('pointercancel', drop);
 
   // ---------- contrôles ----------
-  $('#op').addEventListener('input', e => { art.style.opacity = e.target.value / 100; });
+  $('#op').addEventListener('input', e => { art.style.opacity = e.target.value / 100; $('#opv').value = e.target.value; });
   art.style.opacity = 0.45;
 
   $('#lockBtn').addEventListener('click', e => {
     locked = !locked;
     e.currentTarget.setAttribute('aria-pressed', String(locked));
-    e.currentTarget.textContent = locked ? 'Verrouillé' : 'Verrouiller';
+    const t = locked ? "Déverrouiller l'image" : "Verrouiller l'image";
+    e.currentTarget.title = t; e.currentTarget.setAttribute('aria-label', t);
     pts.clear(); base = null;
   });
 

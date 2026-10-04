@@ -5,8 +5,8 @@ time.sleep(1)
 URL="http://localhost:8765/"
 ok=lambda c,m: print(("✅ " if c else "❌ ")+m) or c
 results=[]
-async def ctx_page(b, delay=6000, deny=False, extra=""):
-    ctx = await b.new_context(viewport={"width":390,"height":844}, has_touch=True, is_mobile=True)
+async def ctx_page(b, delay=6000, deny=False, extra="", vp=(390,844)):
+    ctx = await b.new_context(viewport={"width":vp[0],"height":vp[1]}, has_touch=True, is_mobile=True)
     if not deny: await ctx.grant_permissions(["camera"], origin=URL.rstrip('/'))
     page = await ctx.new_page()
     errs=[]; page.on("pageerror", lambda e: errs.append(str(e)))
@@ -15,6 +15,7 @@ async def ctx_page(b, delay=6000, deny=False, extra=""):
          ("const real=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices); navigator.mediaDevices.getUserMedia=c=>new Promise(r=>setTimeout(()=>r(real(c)),%d));" % delay)
     js += " const _c=navigator.mediaDevices.getUserMedia; window.__gum=0; navigator.mediaDevices.getUserMedia=c=>{window.__gum++; return _c.call(navigator.mediaDevices,c)};"
     await page.add_init_script(js + extra)
+    reqs=[]; page.on("request", lambda r: reqs.append(r.url)); page.reqs = reqs
     await page.goto(URL); return ctx, page, errs
 
 async def start(page):
@@ -49,6 +50,69 @@ LOCK = """(() => { window.__vis = 'hidden';
   cam.srcObject.getTracks().forEach(t => t.stop()); cam.pause(); window.__sentinel.release();
   document.dispatchEvent(new Event('visibilitychange')); })()"""
 UNLOCK = "(() => { window.__vis = 'visible'; document.dispatchEvent(new Event('visibilitychange')); })()"
+# Contrôles visuels de la DA, évalués dans la page
+AUDIT = r"""(scope) => {
+  const vis = e => { const r = e.getBoundingClientRect(), c = getComputedStyle(e);
+    return r.width > 0 && r.height > 0 && c.visibility != 'hidden' && c.display != 'none' && !e.closest('[hidden]'); };
+  const rgb = s => (s.match(/[\d.]+/g) || []).map(Number);
+  const lum = ([r,g,b]) => { const f = v => (v/=255) <= .03928 ? v/12.92 : ((v+.055)/1.055)**2.4; return .2126*f(r)+.7152*f(g)+.0722*f(b); };
+  const bgOf = e => { for (; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor);
+    if (c.length == 3 || c[3] > .9) return c.slice(0,3); if (e.id == 'stage') return null; } return [255,255,255]; };
+  const sel = scope == 'intro' ? '#intro label.btn, #intro button' : '#top button, #top label.btn, #panel button, #panel input, #peek';
+  const targets = [...document.querySelectorAll(sel)].filter(vis);
+  const small = targets.filter(e => { const r = e.getBoundingClientRect(); return r.width < 44 || r.height < 44; })
+                       .map(e => e.id || e.textContent.trim());
+  const stretched = [...document.querySelectorAll('#top button, #top label.btn, #panel button')].filter(vis).filter(e => {
+    const w = e.getBoundingClientRect().width, old = e.style.cssText;
+    e.style.width = 'max-content'; e.style.flex = 'none'; const n = Math.max(44, e.getBoundingClientRect().width);
+    e.style.cssText = old; return w > n + 2; }).map(e => e.id || e.textContent.trim());
+  const texts = [...document.querySelectorAll(scope == 'intro' ? '#intro *' : '#top *, #panel *, #peek')].filter(vis)
+    .filter(e => [...e.childNodes].some(n => n.nodeType == 3 && n.textContent.trim()));
+  const lowContrast = texts.map(e => { const bg = bgOf(e); if (!bg) return null;
+    const a = lum(rgb(getComputedStyle(e).color)), b = lum(bg), r = (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+    return r < 4.5 ? `${e.id || e.textContent.trim().slice(0,15)} (${r.toFixed(1)})` : null; }).filter(Boolean);
+  const radius = targets.filter(e => parseFloat(getComputedStyle(e).borderRadius) > 0).map(e => e.id || e.textContent.trim());
+  return { small, stretched, lowContrast, radius };
+}"""
+PANEL = "(()=>{const e=document.querySelector('#panel'), r=e.getBoundingClientRect(), c=getComputedStyle(e); return {l:r.left,r:r.right,t:r.top,b:r.bottom,w:r.width,bw:c.borderTopWidth,sh:c.boxShadow}})()"
+FONTS = r"""document.fonts.ready.then(()=>[...document.fonts].filter(f=>f.status=='loaded').map(f=>f.family.replace(/"/g,'')+' '+f.weight))"""
+
+async def layout(b, vp, name):
+    ctx,page,errs = await ctx_page(b, delay=0, vp=vp)
+    W,H = vp
+    show_resume = "v => { const r = document.querySelector('#resume'); if (r) r.hidden = !v; }"
+    await page.evaluate(show_resume, True)   # aperçu de la carte Reprendre (branchée au point 5)
+    await page.wait_for_timeout(300)
+    await page.screenshot(path=f"tests/test_accueil_{name}.png")
+    a = await page.evaluate(AUDIT, 'intro')
+    results.append(ok(not a['small'] and not a['lowContrast'], f"{name} accueil : cibles ≥ 44px {a['small'] or 'ok'}, contraste ≥ 4.5 {a['lowContrast'] or 'ok'}"))
+    await page.evaluate(show_resume, False)
+    await start(page)
+    await page.tap('[data-mode="lines"]'); await page.tap('#gridBtn'); await page.wait_for_timeout(500)
+    await page.screenshot(path=f"tests/test_dessin_{name}.png")
+    a = await page.evaluate(AUDIT, 'dessin')
+    results.append(ok(not a['small'], f"{name} dessin : cibles tactiles ≥ 44px {a['small'] or ''}"))
+    results.append(ok(not a['lowContrast'], f"{name} dessin : contraste texte ≥ 4.5:1 {a['lowContrast'] or ''}"))
+    results.append(ok(not a['stretched'], f"{name} dessin : boutons jamais étirés {a['stretched'] or ''}"))
+    results.append(ok(not a['radius'], f"{name} dessin : angles droits {a['radius'] or ''}"))
+    p = await page.evaluate(PANEL)
+    if name == "telephone":
+        good = p['l']==0 and p['r']==W and abs(p['b']-H)<1 and p['bw']=='2px'
+    elif name == "paysage":
+        good = p['r']==W and p['t']==0 and abs(p['b']-H)<1 and p['w']<=300 and p['l']>W/2
+    else:
+        good = p['w']<=420 and abs((p['l']+p['r'])/2-W/2)<2 and H-p['b']>=12 and p['bw']=='2px' and '6px 6px 0px' in p['sh']
+    results.append(ok(good, f"{name} : panneau placé ({p['l']:.0f}→{p['r']:.0f} × {p['t']:.0f}→{p['b']:.0f}, bord {p['bw']})"))
+    if name == "paysage":   # l'image se centre dans la zone libre, à gauche du panneau
+        r = await page.evaluate("(()=>{const r=art.getBoundingClientRect();return [r.left,r.right,(r.left+r.right)/2]})()")
+        results.append(ok(r[1] <= p['l']+1 and abs(r[2]-p['l']/2) < 3, f"paysage : image centrée hors du panneau ({r[0]:.0f}→{r[1]:.0f}, panneau à {p['l']:.0f})"))
+    fonts = await page.evaluate(FONTS)
+    ext = [u for u in page.reqs if not u.startswith(URL) and not u.startswith(("data:", "blob:"))]
+    results.append(ok(any('Bricolage' in f for f in fonts) and any('Space Mono' in f for f in fonts) and not ext,
+                      f"{name} : polices locales chargées {sorted(set(fonts))}, requêtes externes {ext or 'aucune'}"))
+    results.append(ok(not errs, f"{name} : aucune erreur JS" + ("" if not errs else f" : {errs}")))
+    await ctx.close()
+
 hidden = lambda sel: f"(()=>{{const e=document.querySelector('{sel}'); return !!e && (e.hidden || getComputedStyle(e).display=='none')}})()"
 
 async def main():
@@ -180,6 +244,9 @@ async def main():
         results.append(ok(await page.evaluate(hidden('#focusBtn')), "Pas de mise au point manuelle → bouton netteté masqué"))
         await ctx.close()
 
+        for vp,name in [((390,844),"telephone"), ((844,390),"paysage"), ((1024,1366),"tablette")]:
+            await layout(b, vp, name)
+
         ctx,page,errs = await ctx_page(b, delay=300, deny=True)
         async with page.expect_file_chooser(timeout=1500) as fc: await page.tap("#pick")
         await (await fc.value).set_files("tests/chat.png")
@@ -188,5 +255,12 @@ async def main():
         results.append(ok(not st[0] and not st[1], f"Caméra refusée → message clair : « {st[2][:50]}… »"))
         await page.screenshot(path="tests/test_refus.png")
         await b.close()
+    import re, os
+    sw = open("sw.js", encoding="utf-8").read()
+    files = re.findall(r"'([^']+)'", re.search(r"FILES\s*=\s*\[(.*?)\]", sw, re.S).group(1))
+    missing = [f for f in files if f != './' and not os.path.exists(f)]
+    fonts = [f for f in os.listdir("fonts") if f.endswith(".woff2")] if os.path.isdir("fonts") else []
+    results.append(ok(fonts and not missing and all("fonts/"+f in files for f in fonts),
+                      f"sw.js : FILES complet, polices incluses {fonts}, manquants {missing or 'aucun'}"))
     print(f"\n{sum(results)}/{len(results)} tests OK")
 asyncio.run(main()); srv.terminate()
