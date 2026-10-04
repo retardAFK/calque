@@ -45,7 +45,17 @@
     will-change:transform;image-rendering:auto;
   }
   #art.hidden{display:none}
-  .peek #art{visibility:hidden}
+  .peek #art,.peek #grid{visibility:hidden}
+  /* grille de report : mêmes dimensions et même transformation que l'image */
+  #grid{
+    position:absolute;left:50%;top:50%;transform-origin:center center;
+    --gc:rgba(255,40,90,.85);
+    background-image:
+      linear-gradient(to right,var(--gc) var(--gw,1px),transparent var(--gw,1px)),
+      linear-gradient(to bottom,var(--gc) var(--gw,1px),transparent var(--gw,1px));
+    background-size:var(--cw) var(--ch);
+    box-shadow:inset calc(-1 * var(--gw,1px)) calc(-1 * var(--gw,1px)) 0 var(--gc);
+  }
 
   /* ---- chrome ---- */
   .bar{
@@ -130,7 +140,7 @@
 
 <div id="stage">
   <video id="cam" playsinline muted autoplay></video>
-  <div id="layer"><img id="art" alt=""></div>
+  <div id="layer"><img id="art" alt=""><div id="grid" hidden></div></div>
 
   <div class="bar" id="top">
     <button class="icon" id="bareBtn" title="Masquer les réglages">◳</button>
@@ -155,6 +165,7 @@
         <button data-mode="invert" aria-pressed="false">Négatif</button>
       </div>
       <button id="mirrorBtn" aria-pressed="false">Miroir</button>
+      <button id="gridBtn" aria-pressed="false">Grille</button>
       <button id="torchBtn" aria-pressed="false" hidden>Lampe</button>
       <button id="focusBtn" aria-pressed="false" hidden title="Bloquer la mise au point">Netteté fixe</button>
     </div>
@@ -180,9 +191,12 @@
   // ---------- état de la transformation ----------
   const T = { x:0, y:0, scale:1, rot:0 };
   let mirrored = false, locked = false;
+  const grid = $('#grid');
   const apply = () => {
     art.style.transform =
       `translate(-50%, -50%) translate(${T.x}px, ${T.y}px) rotate(${T.rot}deg) scale(${T.scale * (mirrored ? -1 : 1)}, ${T.scale})`;
+    grid.style.transform = art.style.transform;
+    grid.style.setProperty('--gw', (1.5 / T.scale) + 'px'); // traits ~1,5 px à l'écran quel que soit le zoom
   };
 
   // ---------- caméra ----------
@@ -288,6 +302,11 @@
     const s = Math.min(sw / img.naturalWidth, sh / img.naturalHeight) * 0.85;
     img.style.width = img.naturalWidth + 'px';
     img.style.height = img.naturalHeight + 'px';
+    // grille : 6 cases sur le petit côté, cases presque carrées qui tombent juste sur les bords
+    const w = img.naturalWidth, h = img.naturalHeight, cell = Math.min(w, h) / 6;
+    grid.style.width = w + 'px'; grid.style.height = h + 'px';
+    grid.style.setProperty('--cw', w / Math.max(1, Math.round(w / cell)) + 'px');
+    grid.style.setProperty('--ch', h / Math.max(1, Math.round(h / cell)) + 'px');
     T.x = 0; T.y = 0; T.rot = 0; T.scale = s;
     apply();
   }
@@ -417,6 +436,11 @@
     e.currentTarget.setAttribute('aria-pressed', String(locked));
     e.currentTarget.textContent = locked ? 'Verrouillé' : 'Verrouiller';
     pts.clear(); base = null;
+  });
+
+  $('#gridBtn').addEventListener('click', e => {
+    grid.hidden = !grid.hidden;
+    e.currentTarget.setAttribute('aria-pressed', String(!grid.hidden));
   });
 
   $('#mirrorBtn').addEventListener('click', e => {

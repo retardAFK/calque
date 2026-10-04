@@ -77,15 +77,23 @@ async def main():
             results.append(ok(src.startswith("data:image/png"), "Mode Contours : image de contours générée"))
             await page.screenshot(path="tests/test_contours.png")
 
+            # Grille : suit la transformation de l'image
+            same = "(()=>{const a=art.getBoundingClientRect(), g=document.querySelector('#grid').getBoundingClientRect(); return grid.style.transform==art.style.transform && ['left','top','width','height'].every(k=>Math.abs(a[k]-g[k])<1)})()"
+            await page.tap("#gridBtn"); await page.wait_for_timeout(100)
+            gon = await page.evaluate("getComputedStyle(document.querySelector('#grid')).display!='none' && gridBtn.getAttribute('aria-pressed')=='true'")
+            results.append(ok(gon and await page.evaluate(same), "Grille affichée, alignée sur l'image"))
+
             # Appui long sur l'image : elle disparaît tant que le doigt reste posé, sans bouger
             vis = "getComputedStyle(art).visibility"
             before = await page.evaluate("art.style.transform")
             await page.mouse.move(195,422); await page.mouse.down(); await page.wait_for_timeout(700)
             await page.mouse.move(198,424)  # petit tremblement du doigt
             hid = await page.evaluate(vis); held = await page.evaluate("art.style.transform")
+            ghid = await page.evaluate("getComputedStyle(document.querySelector('#grid')).visibility")
             await page.screenshot(path="tests/test_appui_long.png")
             await page.mouse.up(); shown = await page.evaluate(vis)
             results.append(ok(hid=="hidden" and shown=="visible", f"Appui long : image masquée puis réaffichée ({hid} → {shown})"))
+            results.append(ok(ghid=="hidden", "Appui long : la grille disparaît aussi"))
             results.append(ok(held==before==await page.evaluate("art.style.transform"), "Appui long : aucun déplacement"))
             await page.mouse.move(195,120); await page.mouse.down(); await page.wait_for_timeout(700)
             out = await page.evaluate(vis); await page.mouse.up()
@@ -94,6 +102,8 @@ async def main():
             await page.mouse.move(195,420); await page.mouse.down(); await page.mouse.move(255,470,steps=5); await page.mouse.up()
             after = await page.evaluate("art.style.transform")
             results.append(ok(before!=after, "Glisser déplace l'image"))
+            results.append(ok(await page.evaluate(same), "La grille suit l'image déplacée"))
+            await page.screenshot(path="tests/test_grille.png")
 
             await page.tap("#lockBtn")
             before = after
