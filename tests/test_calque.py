@@ -5,7 +5,7 @@ time.sleep(1)
 URL="http://localhost:8765/"
 ok=lambda c,m: print(("✅ " if c else "❌ ")+m) or c
 results=[]
-async def ctx_page(b, delay=6000, deny=False):
+async def ctx_page(b, delay=6000, deny=False, extra=""):
     ctx = await b.new_context(viewport={"width":390,"height":844}, has_touch=True, is_mobile=True)
     if not deny: await ctx.grant_permissions(["camera"], origin=URL.rstrip('/'))
     page = await ctx.new_page()
@@ -14,8 +14,22 @@ async def ctx_page(b, delay=6000, deny=False):
     js = ("navigator.mediaDevices.getUserMedia = () => new Promise((_,j)=>setTimeout(()=>j(new DOMException('no','NotAllowedError')),%d));" % delay) if deny else \
          ("const real=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices); navigator.mediaDevices.getUserMedia=c=>new Promise(r=>setTimeout(()=>r(real(c)),%d));" % delay)
     js += " const _c=navigator.mediaDevices.getUserMedia; window.__gum=0; navigator.mediaDevices.getUserMedia=c=>{window.__gum++; return _c.call(navigator.mediaDevices,c)};"
-    await page.add_init_script(js)
+    await page.add_init_script(js + extra)
     await page.goto(URL); return ctx, page, errs
+
+async def start(page):
+    async with page.expect_file_chooser(timeout=1500) as fc: await page.tap("#pick")
+    await (await fc.value).set_files("tests/chat.png")
+    await page.wait_for_function("document.querySelector('#intro').classList.contains('gone')", timeout=10000)
+
+# Caméra de téléphone simulée : capacités en plus, applyConstraints enregistré dans window.__ac
+FAKE_CAPS = """
+const P = MediaStreamTrack.prototype, gc = P.getCapabilities;
+window.__ac = [];
+P.getCapabilities = function(){ return Object.assign(gc.call(this), {torch:true}); };
+P.applyConstraints = function(c){ window.__ac.push(c); return Promise.resolve(); };
+"""
+hidden = lambda sel: f"(()=>{{const e=document.querySelector('{sel}'); return !!e && (e.hidden || getComputedStyle(e).display=='none')}})()"
 
 async def main():
     async with async_playwright() as p:
@@ -37,6 +51,7 @@ async def main():
             results.append(ok(vs[0]>=2 and vs[1]>0, f"Flux caméra actif (readyState {vs[0]}, {vs[1]}px)"))
             nw = await page.evaluate("art.naturalWidth")
             results.append(ok(nw==800, f"Image affichée par-dessus ({nw}px)"))
+            results.append(ok(await page.evaluate(hidden('#torchBtn')), "Pas de torche sur cette caméra → bouton lampe masqué"))
             await page.screenshot(path="tests/test_photo.png")
             bx = await page.evaluate("(()=>{const r=art.getBoundingClientRect();return [r.left+r.width/2, r.top+r.height/2, r.width]})()")
             results.append(ok(abs(bx[0]-195)<3 and abs(bx[1]-422)<3, f"Image centrée à l'écran (centre {bx[0]:.0f},{bx[1]:.0f})"))
@@ -89,6 +104,19 @@ async def main():
             swr = await page.evaluate("navigator.serviceWorker.controller !== null || navigator.serviceWorker.getRegistration().then(r=>!!r)")
             results.append(ok(swr, "Service worker enregistré (installable)"))
         results.append(ok(not errs, "Aucune erreur JS" + ("" if not errs else f" : {errs}")))
+        await ctx.close()
+
+        ctx,page,errs = await ctx_page(b, delay=0, extra=FAKE_CAPS)
+        await start(page)
+        results.append(ok(not await page.evaluate(hidden('#torchBtn')), "Caméra avec torche → bouton lampe affiché"))
+        await page.screenshot(path="tests/test_options_camera.png")
+        await page.tap("#torchBtn")
+        a1 = await page.evaluate("[JSON.stringify(__ac.at(-1)), torchBtn.getAttribute('aria-pressed')]")
+        await page.tap("#torchBtn")
+        a2 = await page.evaluate("[JSON.stringify(__ac.at(-1)), torchBtn.getAttribute('aria-pressed')]")
+        results.append(ok(a1==['{"advanced":[{"torch":true}]}','true'] and a2==['{"advanced":[{"torch":false}]}','false'],
+                          f"Lampe : allume puis éteint ({a1[0]} / {a2[0]})"))
+        results.append(ok(not errs, "Caméra simulée : aucune erreur JS" + ("" if not errs else f" : {errs}")))
         await ctx.close()
 
         ctx,page,errs = await ctx_page(b, delay=300, deny=True)

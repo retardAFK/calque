@@ -155,6 +155,7 @@
         <button data-mode="invert" aria-pressed="false">Négatif</button>
       </div>
       <button id="mirrorBtn" aria-pressed="false">Miroir</button>
+      <button id="torchBtn" aria-pressed="false" hidden>Lampe</button>
     </div>
   </div>
 </div>
@@ -192,6 +193,7 @@
       });
       cam.srcObject = stream;
       await cam.play();
+      camControls(stream.getVideoTracks()[0]);
       return true;
     } catch (e) {
       show(e.name === 'NotAllowedError'
@@ -199,6 +201,19 @@
         : "Caméra indisponible. Il faut une connexion HTTPS et, sur iPhone, Safari directement.");
       return false;
     }
+  }
+  // Options matérielles : boutons affichés seulement si la caméra les supporte
+  function camControls(track) {
+    const caps = (track && track.getCapabilities) ? track.getCapabilities() : {};
+    const torchBtn = $('#torchBtn');
+    torchBtn.hidden = !caps.torch;
+    torchBtn.onclick = async () => {
+      const on = torchBtn.getAttribute('aria-pressed') !== 'true';
+      try {
+        await track.applyConstraints({ advanced: [{ torch: on }] });
+        torchBtn.setAttribute('aria-pressed', String(on));
+      } catch { torchBtn.hidden = true; }
+    };
   }
   function show(msg){ err.hidden = false; err.textContent = msg; }
 
