@@ -45,6 +45,7 @@
     will-change:transform;image-rendering:auto;
   }
   #art.hidden{display:none}
+  .peek #art{visibility:hidden}
 
   /* ---- chrome ---- */
   .bar{
@@ -311,19 +312,42 @@
     };
   };
 
+  // ---------- appui long sur l'image : elle disparaît tant que le doigt reste posé ----------
+  const HOLD_MS = 450, SLOP = 10;   // un doigt qui tremble de moins de SLOP px ne déplace rien
+  let press = null;                 // { x, y, timer } tant que l'appui peut encore devenir long
   const stage = $('#stage');
+  const peeking = () => stage.classList.contains('peek');
+  const onArt = (x, y) => {          // point écran -> repère de l'image (inverse de apply())
+    const dx = x - (innerWidth / 2 + T.x), dy = y - (innerHeight / 2 + T.y);
+    const r = -T.rot * Math.PI / 180;
+    const u = (dx * Math.cos(r) - dy * Math.sin(r)) / T.scale;
+    const v = (dx * Math.sin(r) + dy * Math.cos(r)) / T.scale;
+    return Math.abs(u) <= art.offsetWidth / 2 && Math.abs(v) <= art.offsetHeight / 2;
+  };
+  const cancelPress = () => { if (press) clearTimeout(press.timer); press = null; };
+
   stage.addEventListener('pointerdown', e => {
-    if (locked || intro.classList.contains('gone') === false) return;
+    if (intro.classList.contains('gone') === false) return;
     if (e.target.closest('.bar, #panel, #peek')) return;
     stage.setPointerCapture(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    cancelPress();
+    if (pts.size === 1 && onArt(e.clientX, e.clientY))
+      press = { x: e.clientX, y: e.clientY,
+                timer: setTimeout(() => { press = null; stage.classList.add('peek'); }, HOLD_MS) };
     base = pts.size === 2 ? { ...pair(), scale: T.scale, rot: T.rot, x: T.x, y: T.y } : null;
   });
 
   stage.addEventListener('pointermove', e => {
-    if (!pts.has(e.pointerId) || locked) return;
-    const prev = pts.get(e.pointerId);
+    if (!pts.has(e.pointerId)) return;
+    let prev = pts.get(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (peeking()) return;
+    if (press) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < SLOP) return;
+      prev = press; cancelPress();  // vrai glissé : on rattrape depuis le point de départ
+    }
+    if (locked) return;
 
     if (pts.size === 1) {
       T.x += e.clientX - prev.x;
@@ -341,6 +365,8 @@
 
   const drop = e => {
     pts.delete(e.pointerId);
+    cancelPress();
+    stage.classList.remove('peek');
     base = pts.size === 2 ? { ...pair(), scale: T.scale, rot: T.rot, x: T.x, y: T.y } : null;
   };
   stage.addEventListener('pointerup', drop);

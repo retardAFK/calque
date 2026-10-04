@@ -50,7 +50,20 @@ async def main():
             results.append(ok(src.startswith("data:image/png"), "Mode Contours : image de contours générée"))
             await page.screenshot(path="tests/test_contours.png")
 
+            # Appui long sur l'image : elle disparaît tant que le doigt reste posé, sans bouger
+            vis = "getComputedStyle(art).visibility"
             before = await page.evaluate("art.style.transform")
+            await page.mouse.move(195,422); await page.mouse.down(); await page.wait_for_timeout(700)
+            await page.mouse.move(198,424)  # petit tremblement du doigt
+            hid = await page.evaluate(vis); held = await page.evaluate("art.style.transform")
+            await page.screenshot(path="tests/test_appui_long.png")
+            await page.mouse.up(); shown = await page.evaluate(vis)
+            results.append(ok(hid=="hidden" and shown=="visible", f"Appui long : image masquée puis réaffichée ({hid} → {shown})"))
+            results.append(ok(held==before==await page.evaluate("art.style.transform"), "Appui long : aucun déplacement"))
+            await page.mouse.move(195,120); await page.mouse.down(); await page.wait_for_timeout(700)
+            out = await page.evaluate(vis); await page.mouse.up()
+            results.append(ok(out=="visible", "Appui long hors de l'image : rien ne disparaît"))
+
             await page.mouse.move(195,420); await page.mouse.down(); await page.mouse.move(255,470,steps=5); await page.mouse.up()
             after = await page.evaluate("art.style.transform")
             results.append(ok(before!=after, "Glisser déplace l'image"))
@@ -60,6 +73,9 @@ async def main():
             await page.mouse.move(195,420); await page.mouse.down(); await page.mouse.move(100,300,steps=5); await page.mouse.up()
             after = await page.evaluate("art.style.transform")
             results.append(ok(before==after, "Verrouillé : l'image ne bouge plus"))
+            await page.mouse.move(255,472); await page.mouse.down(); await page.wait_for_timeout(700)
+            hid = await page.evaluate(vis); await page.mouse.up()
+            results.append(ok(hid=="hidden" and await page.evaluate(vis)=="visible", "Appui long marche aussi verrouillé"))
 
             await page.fill("#op","80"); await page.dispatch_event("#op","input")
             results.append(ok(await page.evaluate("art.style.opacity")=="0.8", "Curseur d'opacité"))
