@@ -36,6 +36,19 @@ NO_FOCUS = """
 const P = MediaStreamTrack.prototype, gc = P.getCapabilities;
 P.getCapabilities = function(){ const c = gc.call(this); delete c.focusMode; delete c.focusDistance; return c; };
 """
+# Téléphone verrouillé puis déverrouillé : visibilité pilotable, Wake Lock simulé (compte les demandes)
+PHONE_LOCK = """
+window.__vis = 'visible'; window.__wl = 0;
+Object.defineProperty(document, 'visibilityState', { get: () => window.__vis });
+Object.defineProperty(document, 'hidden', { get: () => window.__vis === 'hidden' });
+Object.defineProperty(navigator, 'wakeLock', { value: { request: () => {
+  window.__wl++; const s = new EventTarget(); s.release = () => s.dispatchEvent(new Event('release'));
+  window.__sentinel = s; return Promise.resolve(s); } } });
+"""
+LOCK = """(() => { window.__vis = 'hidden';
+  cam.srcObject.getTracks().forEach(t => t.stop()); cam.pause(); window.__sentinel.release();
+  document.dispatchEvent(new Event('visibilitychange')); })()"""
+UNLOCK = "(() => { window.__vis = 'visible'; document.dispatchEvent(new Event('visibilitychange')); })()"
 hidden = lambda sel: f"(()=>{{const e=document.querySelector('{sel}'); return !!e && (e.hidden || getComputedStyle(e).display=='none')}})()"
 
 async def main():
@@ -56,6 +69,8 @@ async def main():
             results.append(ok(True, "Image choisie, popup caméra lente (6 s) → l'appli démarre quand même"))
             vs = await page.evaluate("[cam.readyState, cam.videoWidth]")
             results.append(ok(vs[0]>=2 and vs[1]>0, f"Flux caméra actif (readyState {vs[0]}, {vs[1]}px)"))
+            pz = await page.evaluate("[cam.paused, cam.controls, cam.disablePictureInPicture]")
+            results.append(ok(pz==[False,False,True], f"Vidéo en lecture, sans contrôles natifs (paused={pz[0]}, controls={pz[1]}, pip off={pz[2]})"))
             nw = await page.evaluate("art.naturalWidth")
             results.append(ok(nw==800, f"Image affichée par-dessus ({nw}px)"))
             results.append(ok(await page.evaluate(hidden('#torchBtn')), "Pas de torche sur cette caméra → bouton lampe masqué"))
@@ -147,6 +162,17 @@ async def main():
                           and f2==['{"advanced":[{"focusMode":"continuous"}]}','false'],
                           f"Netteté : fige à la distance actuelle puis relâche ({f1[0]} / {f2[0]})"))
         results.append(ok(not errs, "Caméra simulée : aucune erreur JS" + ("" if not errs else f" : {errs}")))
+        await ctx.close()
+
+        ctx,page,errs = await ctx_page(b, delay=0, extra=PHONE_LOCK)
+        await start(page); await page.wait_for_timeout(300)
+        await page.evaluate(LOCK); await page.wait_for_timeout(300)
+        await page.evaluate(UNLOCK); await page.wait_for_timeout(1500)
+        rv = await page.evaluate("[cam.paused, cam.readyState, cam.srcObject && cam.srcObject.getVideoTracks()[0].readyState, window.__wl]")
+        await page.screenshot(path="tests/test_retour.png")
+        results.append(ok(rv[0]==False and rv[1]>=2 and rv[2]=='live', f"Retour après verrouillage : caméra relancée (paused={rv[0]}, piste {rv[2]})"))
+        results.append(ok(rv[3]==2, f"Retour après verrouillage : écran maintenu allumé de nouveau ({rv[3]} demande(s) Wake Lock)"))
+        results.append(ok(not errs, "Verrouillage : aucune erreur JS" + ("" if not errs else f" : {errs}")))
         await ctx.close()
 
         ctx,page,errs = await ctx_page(b, delay=0, extra=NO_FOCUS)
