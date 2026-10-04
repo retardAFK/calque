@@ -24,10 +24,17 @@ async def start(page):
 
 # Caméra de téléphone simulée : capacités en plus, applyConstraints enregistré dans window.__ac
 FAKE_CAPS = """
-const P = MediaStreamTrack.prototype, gc = P.getCapabilities;
+const P = MediaStreamTrack.prototype, gc = P.getCapabilities, gs = P.getSettings;
 window.__ac = [];
-P.getCapabilities = function(){ return Object.assign(gc.call(this), {torch:true}); };
+P.getCapabilities = function(){ return Object.assign(gc.call(this), {torch:true,
+  focusMode:['continuous','manual'], focusDistance:{min:0, max:1, step:0.01}}); };
+P.getSettings = function(){ return Object.assign(gs.call(this), {focusMode:'continuous', focusDistance:0.35}); };
 P.applyConstraints = function(c){ window.__ac.push(c); return Promise.resolve(); };
+"""
+# Caméra sans mise au point réglable
+NO_FOCUS = """
+const P = MediaStreamTrack.prototype, gc = P.getCapabilities;
+P.getCapabilities = function(){ const c = gc.call(this); delete c.focusMode; delete c.focusDistance; return c; };
 """
 hidden = lambda sel: f"(()=>{{const e=document.querySelector('{sel}'); return !!e && (e.hidden || getComputedStyle(e).display=='none')}})()"
 
@@ -52,6 +59,11 @@ async def main():
             nw = await page.evaluate("art.naturalWidth")
             results.append(ok(nw==800, f"Image affichée par-dessus ({nw}px)"))
             results.append(ok(await page.evaluate(hidden('#torchBtn')), "Pas de torche sur cette caméra → bouton lampe masqué"))
+            # La fausse caméra de Chromium déclare focusMode manual : vraie contrainte appliquée
+            await page.tap("#focusBtn"); await page.wait_for_timeout(300)
+            fs = await page.evaluate("[focusBtn.getAttribute('aria-pressed'), cam.srcObject.getVideoTracks()[0].getSettings().focusMode]")
+            await page.tap("#focusBtn"); await page.wait_for_timeout(300)
+            results.append(ok(fs==['true','manual'], f"Netteté fixe sur la caméra Chromium (mode {fs[1]})"))
             await page.screenshot(path="tests/test_photo.png")
             bx = await page.evaluate("(()=>{const r=art.getBoundingClientRect();return [r.left+r.width/2, r.top+r.height/2, r.width]})()")
             results.append(ok(abs(bx[0]-195)<3 and abs(bx[1]-422)<3, f"Image centrée à l'écran (centre {bx[0]:.0f},{bx[1]:.0f})"))
@@ -116,7 +128,20 @@ async def main():
         a2 = await page.evaluate("[JSON.stringify(__ac.at(-1)), torchBtn.getAttribute('aria-pressed')]")
         results.append(ok(a1==['{"advanced":[{"torch":true}]}','true'] and a2==['{"advanced":[{"torch":false}]}','false'],
                           f"Lampe : allume puis éteint ({a1[0]} / {a2[0]})"))
+        results.append(ok(not await page.evaluate(hidden('#focusBtn')), "Mise au point manuelle possible → bouton netteté affiché"))
+        await page.tap("#focusBtn")
+        f1 = await page.evaluate("[JSON.stringify(__ac.at(-1)), focusBtn.getAttribute('aria-pressed')]")
+        await page.tap("#focusBtn")
+        f2 = await page.evaluate("[JSON.stringify(__ac.at(-1)), focusBtn.getAttribute('aria-pressed')]")
+        results.append(ok(f1==['{"advanced":[{"focusMode":"manual","focusDistance":0.35}]}','true']
+                          and f2==['{"advanced":[{"focusMode":"continuous"}]}','false'],
+                          f"Netteté : fige à la distance actuelle puis relâche ({f1[0]} / {f2[0]})"))
         results.append(ok(not errs, "Caméra simulée : aucune erreur JS" + ("" if not errs else f" : {errs}")))
+        await ctx.close()
+
+        ctx,page,errs = await ctx_page(b, delay=0, extra=NO_FOCUS)
+        await start(page)
+        results.append(ok(await page.evaluate(hidden('#focusBtn')), "Pas de mise au point manuelle → bouton netteté masqué"))
         await ctx.close()
 
         ctx,page,errs = await ctx_page(b, delay=300, deny=True)

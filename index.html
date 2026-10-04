@@ -156,6 +156,7 @@
       </div>
       <button id="mirrorBtn" aria-pressed="false">Miroir</button>
       <button id="torchBtn" aria-pressed="false" hidden>Lampe</button>
+      <button id="focusBtn" aria-pressed="false" hidden title="Bloquer la mise au point">Netteté fixe</button>
     </div>
   </div>
 </div>
@@ -213,6 +214,26 @@
         await track.applyConstraints({ advanced: [{ torch: on }] });
         torchBtn.setAttribute('aria-pressed', String(on));
       } catch { torchBtn.hidden = true; }
+    };
+
+    // Mise au point figée à la distance actuelle : la main qui passe ne fait plus « pomper » l'autofocus
+    const focusBtn = $('#focusBtn'), modes = caps.focusMode || [];
+    focusBtn.hidden = !modes.includes('manual');
+    focusBtn.setAttribute('aria-pressed', 'false');
+    focusBtn.onclick = async () => {
+      const on = focusBtn.getAttribute('aria-pressed') !== 'true';
+      let c;
+      if (on) {
+        c = { focusMode: 'manual' };
+        const d = track.getSettings().focusDistance;
+        if (caps.focusDistance && d != null) c.focusDistance = d;
+      } else {
+        c = { focusMode: modes.includes('continuous') ? 'continuous' : modes.find(m => m !== 'manual') };
+      }
+      try {
+        await track.applyConstraints({ advanced: [c] });
+        focusBtn.setAttribute('aria-pressed', String(on));
+      } catch { focusBtn.hidden = true; }
     };
   }
   function show(msg){ err.hidden = false; err.textContent = msg; }
