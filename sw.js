@@ -1,5 +1,5 @@
-const C = 'calque-v4';
-const FILES = ['./', 'index.html', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png',
+const C = 'calque-v5';
+const FILES = ['./', 'index.html', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png', 'js/anchor.js', 'js/vendor/jsfeat-min.js',
   'fonts/bricolage-grotesque-latin-500-normal.woff2', 'fonts/bricolage-grotesque-latin-800-normal.woff2',
   'fonts/space-mono-latin-400-normal.woff2', 'fonts/space-mono-latin-700-normal.woff2'];
 self.addEventListener('install', e => {

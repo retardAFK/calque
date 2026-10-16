@@ -121,6 +121,20 @@
   }
   input[type=range]::-moz-range-thumb{width:24px;height:24px;background:var(--pink);border:var(--line);border-radius:0}
 
+  /* état du verrou ancré : visible même réglages masqués */
+  #track{
+    position:absolute;z-index:6;left:0;right:0;margin:0 auto;width:max-content;
+    top:calc(12px + env(safe-area-inset-top,0px));height:44px;
+    display:flex;align-items:center;pointer-events:none;
+  }
+  #track span{
+    display:flex;align-items:center;gap:8px;padding:7px 10px;
+    background:var(--paper);color:var(--ink);border:var(--line);font-weight:700;
+  }
+  #track span::before{content:"";width:10px;height:10px;background:var(--blue)}
+  #track.lost span{background:var(--pink)}
+  #track.lost span::before{background:var(--ink)}
+
   #peek{
     position:absolute;z-index:6;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));
     box-shadow:6px 6px 0 var(--pink);
@@ -160,7 +174,8 @@
 
   /* ---------- téléphone en paysage : panneau à droite en colonne, barre réduite ---------- */
   @media (orientation:landscape) and (max-height:767px){
-    #layer{right:var(--side)}   /* l'image se centre dans la zone libre */
+    #layer,#track{right:var(--side)}   /* l'image se centre dans la zone libre */
+    #track{top:calc(8px + env(safe-area-inset-top,0px))}
     #top{right:var(--side);padding:calc(8px + env(safe-area-inset-top,0px)) 10px 8px calc(10px + env(safe-area-inset-left,0px))}
     #panel{
       top:0;left:auto;width:var(--side);border-top:0;border-left:var(--line);
@@ -177,6 +192,7 @@
   /* ---------- tablette : panneau en carte flottante ---------- */
   @media (min-width:768px) and (min-height:768px){
     #top{padding:calc(20px + env(safe-area-inset-top,0px)) 24px 20px}
+    #track{top:calc(20px + env(safe-area-inset-top,0px))}
     #panel{
       left:0;right:0;margin:0 auto;bottom:calc(24px + env(safe-area-inset-bottom,0px));
       width:min(420px,calc(100% - 48px));
@@ -214,6 +230,8 @@
       </label>
     </div>
   </div>
+
+  <div id="track" role="status" aria-live="polite" hidden><span class="tag">Ancré</span></div>
 
   <button class="sq" id="peek" title="Afficher les réglages" aria-label="Afficher les réglages">
     <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M3 15h18"/></svg>
@@ -258,6 +276,8 @@
 
 <input type="file" id="file" accept="image/*">
 
+<script src="js/vendor/jsfeat-min.js"></script>
+<script src="js/anchor.js"></script>
 <script>
 (() => {
   const $ = s => document.querySelector(s);
@@ -266,13 +286,34 @@
   // ---------- état de la transformation ----------
   const T = { x:0, y:0, scale:1, rot:0 };
   let mirrored = false, locked = false;
-  const grid = $('#grid');
-  const apply = () => {
-    art.style.transform =
-      `translate(-50%, -50%) translate(${T.x}px, ${T.y}px) rotate(${T.rot}deg) scale(${T.scale * (mirrored ? -1 : 1)}, ${T.scale})`;
-    grid.style.transform = art.style.transform;
-    grid.style.setProperty('--gw', (1.5 / T.scale) + 'px'); // traits ~1,5 px à l'écran quel que soit le zoom
+  const grid = $('#grid'), track = $('#track');
+  // Verrou ancré : le mouvement de la feuille s'ajoute à la transformation utilisateur
+  const anchor = window.Anchor ? window.Anchor(cam, (state, changed) => {
+    if (changed) {
+      track.classList.toggle('lost', state === 'lost');
+      track.firstElementChild.textContent = state === 'lost' ? 'Suivi perdu' : 'Ancré';
+    }
+    apply();
+  }) : null;
+  // transformation affichée = similitude de la feuille (écran) ∘ transformation utilisateur
+  const eff = () => {
+    const S = anchor && anchor.screen();
+    if (!S) return T;
+    const L = $('#layer').getBoundingClientRect(), lx = L.left + L.width / 2, ly = L.top + L.height / 2;
+    const cx = lx + T.x, cy = ly + T.y;
+    return { x: S.a * cx - S.b * cy + S.e - lx, y: S.b * cx + S.a * cy + S.f - ly,
+             rot: T.rot + Math.atan2(S.b, S.a) * 180 / Math.PI, scale: T.scale * Math.hypot(S.a, S.b) };
   };
+  const apply = () => {
+    const E = eff();
+    art.style.transform =
+      `translate(-50%, -50%) translate(${E.x}px, ${E.y}px) rotate(${E.rot}deg) scale(${E.scale * (mirrored ? -1 : 1)}, ${E.scale})`;
+    grid.style.transform = art.style.transform;
+    grid.style.setProperty('--gw', (1.5 / E.scale) + 'px'); // traits ~1,5 px à l'écran quel que soit le zoom
+  };
+  // fige la position affichée dans la transformation utilisateur (déverrouillage, caméra qui change)
+  const bake = () => { Object.assign(T, eff()); };
+  if (anchor) { anchor.onRebase = bake; window.calqueAnchor = anchor; }   // état et temps lisibles par les tests
 
   // ---------- caméra ----------
   async function startCam() {
@@ -396,6 +437,7 @@
     grid.style.setProperty('--cw', w / Math.max(1, Math.round(w / cell)) + 'px');
     grid.style.setProperty('--ch', h / Math.max(1, Math.round(h / cell)) + 'px');
     T.x = 0; T.y = 0; T.rot = 0; T.scale = s;
+    if (anchor) anchor.restart();   // nouvelle référence pour le verrou ancré
     apply();
   }
 
@@ -461,11 +503,11 @@
   const stage = $('#stage');
   const peeking = () => stage.classList.contains('peek');
   const onArt = (x, y) => {          // point écran -> repère de l'image (inverse de apply())
-    const L = $('#layer').getBoundingClientRect();
-    const dx = x - (L.left + L.width / 2 + T.x), dy = y - (L.top + L.height / 2 + T.y);
-    const r = -T.rot * Math.PI / 180;
-    const u = (dx * Math.cos(r) - dy * Math.sin(r)) / T.scale;
-    const v = (dx * Math.sin(r) + dy * Math.cos(r)) / T.scale;
+    const L = $('#layer').getBoundingClientRect(), E = eff();
+    const dx = x - (L.left + L.width / 2 + E.x), dy = y - (L.top + L.height / 2 + E.y);
+    const r = -E.rot * Math.PI / 180;
+    const u = (dx * Math.cos(r) - dy * Math.sin(r)) / E.scale;
+    const v = (dx * Math.sin(r) + dy * Math.cos(r)) / E.scale;
     return Math.abs(u) <= art.offsetWidth / 2 && Math.abs(v) <= art.offsetHeight / 2;
   };
   const cancelPress = () => { if (press) clearTimeout(press.timer); press = null; };
@@ -523,6 +565,12 @@
 
   $('#lockBtn').addEventListener('click', e => {
     locked = !locked;
+    if (anchor) {
+      if (locked) anchor.start();
+      else { bake(); anchor.stop(); apply(); }   // le modèle reste où il est, les gestes reviennent
+      track.hidden = !locked;
+      track.classList.remove('lost'); track.firstElementChild.textContent = 'Ancré';
+    }
     e.currentTarget.setAttribute('aria-pressed', String(locked));
     const t = locked ? "Déverrouiller l'image" : "Verrouiller l'image";
     e.currentTarget.title = t; e.currentTarget.setAttribute('aria-label', t);

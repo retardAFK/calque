@@ -1,4 +1,4 @@
-import asyncio, subprocess, time, sys
+import asyncio, subprocess, time, sys, os
 from playwright.async_api import async_playwright
 srv = subprocess.Popen([sys.executable,"-m","http.server","8765","-d","."],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 time.sleep(1)
@@ -124,11 +124,180 @@ async def layout(b, vp, name):
     results.append(ok(not errs, f"{name} : aucune erreur JS" + ("" if not errs else f" : {errs}")))
     await ctx.close()
 
+# ---------- verrou ancré : vidéos factices .y4m d'une feuille avec quelques traits ----------
+VW, VH, FPS = 360, 640, 15
+# Scène dessinée dans un canvas, renvoyée en plan Y (niveaux de gris) base64.
+# p = { dx, dy, rot (°), hand (x du bord gauche de la main, ou None) } ; toute la scène bouge = le téléphone bouge
+SCENE = r"""(args) => {
+  const [W, H, frames, seed0] = args;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const strokes = [];
+  for (let i = 0; i < 16; i++) {                       // traits au crayon : lignes brisées, courbes, cercles
+    const k = i % 4, px = 60 + rnd() * 240, py = 80 + rnd() * 480, pts = [];
+    for (let j = 0; j < 3 + (rnd() * 4 | 0); j++) pts.push([px + (rnd() - .5) * 140, py + (rnd() - .5) * 140]);
+    strokes.push({ k, pts, w: 2 + rnd() * 2, g: 25 + rnd() * 50, r: 8 + rnd() * 20 });
+  }
+  seed = seed0;
+  const out = [];
+  for (const p of frames) {
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    x.fillStyle = 'rgb(72,72,72)'; x.fillRect(0, 0, W, H);   // table unie
+    x.translate(W / 2 + p.dx, H / 2 + p.dy); x.rotate(p.rot * Math.PI / 180); x.translate(-W / 2, -H / 2);
+    x.fillStyle = 'rgb(236,234,228)'; x.fillRect(30, 40, 300, 560);   // la feuille
+    x.lineCap = 'round'; x.lineJoin = 'miter';
+    for (const s of strokes) {
+      x.strokeStyle = `rgb(${s.g},${s.g},${s.g})`; x.lineWidth = s.w; x.beginPath();
+      if (s.k === 3) x.arc(s.pts[0][0], s.pts[0][1], s.r, 0, 6.2832);
+      else if (s.k === 2) { x.moveTo(...s.pts[0]); x.quadraticCurveTo(...s.pts[1], ...s.pts[2]); }
+      else { x.moveTo(...s.pts[0]); s.pts.slice(1).forEach(q => x.lineTo(...q)); }
+      x.stroke();
+    }
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    if (p.hand != null) {                               // la main : forme sombre qui ne suit pas la feuille
+      x.fillStyle = 'rgb(58,44,40)'; x.beginPath();
+      x.ellipse(p.hand + 110, 330, 110, 150, 0.3, 0, 6.2832); x.fill();
+      for (let f = 0; f < 4; f++) x.fillRect(p.hand - 10 + f * 8, 190 + f * 40, 120, 24);
+    }
+    const d = x.getImageData(0, 0, W, H).data, y = new Uint8Array(W * H);
+    for (let i = 0; i < y.length; i++) {               // bruit de capteur ±4
+      const n = ((seed = (seed * 16807) % 2147483647) % 9) - 4;
+      y[i] = Math.max(0, Math.min(255, d[i * 4] + n));
+    }
+    let b = ''; for (let i = 0; i < y.length; i += 8192) b += String.fromCharCode.apply(null, y.subarray(i, i + 8192));
+    out.push(btoa(b));
+  }
+  return [out, seed];
+}"""
+ease = lambda t, a, b: 0.0 if t <= a else 1.0 if t >= b else (lambda u: u*u*(3-2*u))((t-a)/(b-a))
+SCENARIOS = {   # durée (s), paramètres de scène au temps t
+    "decalage": (10, lambda t: dict(dx=30*ease(t,4,5), dy=0, rot=0, hand=None)),
+    "rotation": (10, lambda t: dict(dx=0, dy=0, rot=5*ease(t,4,5), hand=None)),
+    "main":     (10, lambda t: dict(dx=0, dy=0, rot=0, hand=None if not 4 <= t <= 8 else 380 - 200*min(1, (t-4)/1.5, (8-t)/1.5))),
+    "sortie":   (13, lambda t: dict(dx=430*(ease(t,4,5) - ease(t,7,8)), dy=0, rot=0, hand=None)),
+}
+async def make_y4m(b, name):
+    import base64, os, tempfile
+    d = os.path.join(tempfile.gettempdir(), "calque_y4m"); os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"{name}_v1.y4m")
+    if os.path.exists(path): return path
+    dur, fn = SCENARIOS[name]
+    page = await b.new_page()
+    frames = [fn(i / FPS) for i in range(dur * FPS)]
+    seed = 12345
+    with open(path + ".part", "wb") as f:
+        f.write(f"YUV4MPEG2 W{VW} H{VH} F{FPS}:1 Ip A1:1 C420jpeg\n".encode())
+        uv = bytes([128]) * (VW * VH // 2)
+        for i in range(0, len(frames), 15):
+            ys, seed = await page.evaluate(SCENE, [VW, VH, frames[i:i+15], seed])
+            for y in ys:
+                f.write(b"FRAME\n"); f.write(base64.b64decode(y)); f.write(uv)
+    await page.close(); os.replace(path + ".part", path)
+    return path
+
+# Échantillonne la transformation affichée et l'état du verrou à chaque frame (temps vidéo depuis la 1re frame)
+SAMPLER = r"""
+window.__s = []; window.__t0 = null;
+const _tick = () => {
+  const v = document.querySelector('#cam'); requestAnimationFrame(_tick);
+  if (!v || !v.srcObject || v.readyState < 2) return;
+  if (window.__t0 === null) window.__t0 = performance.now();
+  // translate(-50%, -50%) translate(x, y) rotate(r) scale(sx, sy)
+  const m = (document.querySelector('#art').style.transform.match(/-?[\d.]+(e-?\d+)?/g) || []).map(Number);
+  window.__s.push({ t: (performance.now() - window.__t0) / 1000, x: m[2], y: m[3], r: m[4],
+                    st: window.calqueAnchor ? window.calqueAnchor.state : 'none' });
+};
+requestAnimationFrame(_tick);
+"""
+async def vtime(page, t):   # attend le temps vidéo t (s)
+    await page.wait_for_function(f"window.__t0 !== null && (performance.now() - window.__t0) / 1000 >= {t}", timeout=30000, polling=50)
+def window_avg(s, a, b):
+    w = [e for e in s if a <= e['t'] <= b]
+    n = len(w) or 1
+    return dict(x=sum(e['x'] for e in w)/n, y=sum(e['y'] for e in w)/n, r=sum(e['r'] for e in w)/n, n=len(w))
+COVER = "(()=>{const r=cam.getBoundingClientRect(); return Math.max(r.width/cam.videoWidth, r.height/cam.videoHeight)})()"
+STATE = "[calqueAnchor.state, document.querySelector('#track').hidden, document.querySelector('#track').textContent.trim()]"
+TIMES = []
+
+async def anchor_case(p, gen, name, vps):
+    path = await make_y4m(gen, name)
+    b = await p.chromium.launch(args=["--use-fake-device-for-media-stream","--use-fake-ui-for-media-stream",
+                                      f"--use-file-for-fake-video-capture={path}"])
+    for vp, label in vps:
+        ctx,page,errs = await ctx_page(b, delay=0, vp=vp, extra=SAMPLER, name=f"verrou {name} {label}")
+        await start(page)
+        await vtime(page, 1.5)
+        await page.tap("#lockBtn")
+        await vtime(page, 2.0)
+        st = await page.evaluate(STATE)
+        results.append(ok(st == ['anchored', False, 'Ancré'], f"{name} {label} : verrouillé → « {st[2]} » affiché ({st[0]})"))
+        s_cov = await page.evaluate(COVER)
+        if name == "sortie":
+            await vtime(page, 6.6)
+            lost = await page.evaluate(STATE)
+            await page.screenshot(path="tests/test_suivi_perdu.png")
+            await vtime(page, 11.5)
+            back = await page.evaluate(STATE)
+            await page.screenshot(path="tests/test_suivi_retrouve.png")
+        else:
+            if name == "main":
+                await vtime(page, 6.0); await page.screenshot(path="tests/test_ancre_main.png")
+            await vtime(page, 8.5)
+            if name == "decalage": await page.screenshot(path=f"tests/test_ancre_{label}.png")
+        s = await page.evaluate("window.__s")
+        stats = await page.evaluate("calqueAnchor.stats")
+        base = window_avg(s, 2.5, 3.8)
+        if name == "decalage":
+            end = window_avg(s, 6.0, 8.3)
+            dx, dy, want = end['x'] - base['x'], end['y'] - base['y'], 30 * s_cov
+            results.append(ok(abs(dx - want) <= 3 and abs(dy) <= 3,
+                f"{name} {label} : feuille décalée de 30 px vidéo ({want:.1f} px écran) → modèle {dx:+.1f}, {dy:+.1f} px (écart {dx-want:+.2f})"))
+        elif name == "rotation":
+            end = window_avg(s, 6.0, 8.3)
+            dr = end['r'] - base['r']
+            results.append(ok(abs(dr - 5) <= 1, f"{name} {label} : feuille tournée de 5° → modèle {dr:+.2f}°"))
+            results.append(ok(abs(end['x']-base['x']) <= 3 and abs(end['y']-base['y']) <= 3,
+                f"{name} {label} : centre du modèle stable pendant la rotation ({end['x']-base['x']:+.1f}, {end['y']-base['y']:+.1f} px)"))
+        elif name == "main":
+            w = [e for e in s if 3.8 <= e['t'] <= 8.3]
+            dev = max((((e['x']-base['x'])**2 + (e['y']-base['y'])**2) ** .5 for e in w), default=99)
+            lostn = sum(e['st'] != 'anchored' for e in w)
+            results.append(ok(bool(w) and dev <= 3, f"{name} {label} : la main traverse → le modèle bouge de {dev:.2f} px max ({len(w)} mesures, {lostn} sans suivi)"))
+        else:
+            w = [e for e in s if 5.4 <= e['t'] <= 6.6]
+            frz = max((abs(e['x']-w[0]['x']) + abs(e['y']-w[0]['y']) for e in w), default=99)
+            results.append(ok(lost[0] == 'lost' and lost[2] == 'Suivi perdu' and frz < 0.5,
+                f"{name} {label} : feuille hors cadre → « {lost[2]} », modèle figé (variation {frz:.2f} px)"))
+            end = window_avg(s, 10.0, 11.4)
+            dx, dy = end['x'] - base['x'], end['y'] - base['y']
+            results.append(ok(back[0] == 'anchored' and back[2] == 'Ancré' and abs(dx) <= 3 and abs(dy) <= 3,
+                f"{name} {label} : feuille revenue → « {back[2]} », modèle recalé ({dx:+.1f}, {dy:+.1f} px)"))
+        n = max(1, stats['n'])
+        TIMES.append((f"{name} {label}", stats['total'] / n, stats['max'], stats['n'], stats['skipped']))
+        print(f"   ⏱  {name} {label} : {stats['total']/n:.2f} ms/frame en moyenne (max {stats['max']:.1f}, référence {stats['ref']:.1f}), {stats['n']} frames traitées, {stats['skipped']} sautées")
+        if name == "decalage" and label == "telephone":   # déverrouiller : suivi coupé, gestes rendus, pas de saut
+            pos = "(()=>{const r=art.getBoundingClientRect(); return [r.left+r.width/2, r.top+r.height/2]})()"
+            p0 = await page.evaluate(pos)
+            await page.tap("#lockBtn"); before = await page.evaluate("art.style.transform"); p1 = await page.evaluate(pos)
+            await page.wait_for_timeout(500)
+            un = await page.evaluate("[calqueAnchor.active, document.querySelector('#track').hidden, art.style.transform]")
+            results.append(ok(un[0] is False and un[1] and un[2] == before and abs(p1[0]-p0[0]) < 1 and abs(p1[1]-p0[1]) < 1,
+                              f"Déverrouiller : suivi coupé, état masqué, modèle laissé en place (saut {p1[0]-p0[0]:+.2f}, {p1[1]-p0[1]:+.2f} px)"))
+            await page.mouse.move(195,420); await page.mouse.down(); await page.mouse.move(235,450,steps=5); await page.mouse.up()
+            results.append(ok(await page.evaluate("art.style.transform") != before, "Déverrouiller : les gestes déplacent de nouveau le modèle"))
+        await ctx.close()
+    await b.close()
+
 hidden = lambda sel: f"(()=>{{const e=document.querySelector('{sel}'); return !!e && (e.hidden || getComputedStyle(e).display=='none')}})()"
 
 async def main():
     async with async_playwright() as p:
         b = await p.chromium.launch(args=["--use-fake-device-for-media-stream","--use-fake-ui-for-media-stream"])
+        if os.environ.get("CALQUE_VERROU"):   # mise au point du suivi : seulement les scénarios du verrou ancré
+            for n in os.environ["CALQUE_VERROU"].split(","):
+                await anchor_case(p, b, n, [((390,844),"telephone")])
+            await b.close(); return
         ctx,page,errs = await ctx_page(b)
         t=time.time()
         try:
@@ -261,6 +430,12 @@ async def main():
         for vp,name in [((390,844),"telephone"), ((844,390),"paysage"), ((1024,1366),"tablette")]:
             await layout(b, vp, name)
 
+        SIZES = [((390,844),"telephone"), ((844,390),"paysage"), ((1024,1366),"tablette")]
+        await anchor_case(p, b, "decalage", SIZES)
+        await anchor_case(p, b, "rotation", SIZES[:1])
+        await anchor_case(p, b, "main", SIZES[:1])
+        await anchor_case(p, b, "sortie", SIZES[:1])
+
         ctx,page,errs = await ctx_page(b, delay=300, deny=True)
         async with page.expect_file_chooser(timeout=1500) as fc: await page.tap("#pick")
         await (await fc.value).set_files("tests/chat.png")
@@ -269,13 +444,16 @@ async def main():
         results.append(ok(not st[0] and not st[1], f"Caméra refusée → message clair : « {st[2][:50]}… »"))
         await page.screenshot(path="tests/test_refus.png")
         await b.close()
-    import re, os
+    import re
     sw = open("sw.js", encoding="utf-8").read()
     files = re.findall(r"'([^']+)'", re.search(r"FILES\s*=\s*\[(.*?)\]", sw, re.S).group(1))
     missing = [f for f in files if f != './' and not os.path.exists(f)]
     fonts = [f for f in os.listdir("fonts") if f.endswith(".woff2")] if os.path.isdir("fonts") else []
     results.append(ok(fonts and not missing and all("fonts/"+f in files for f in fonts),
                       f"sw.js : FILES complet, polices incluses {fonts}, manquants {missing or 'aucun'}"))
+    if TIMES:
+        avg = sum(t[1]*t[3] for t in TIMES) / max(1, sum(t[3] for t in TIMES))
+        print(f"\n⏱  Verrou ancré : {avg:.2f} ms par frame traitée en moyenne, max {max(t[2] for t in TIMES):.1f} ms (PC de test)")
     bad = [(n, e) for n, e in ALL_ERRS if e]
     results.append(ok(not bad, f"Zéro erreur console / pageerror sur {len(ALL_ERRS)} pages" + ("" if not bad else f" : {bad}")))
     print(f"\n{sum(results)}/{len(results)} tests OK")

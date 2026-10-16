@@ -15,13 +15,13 @@ Sur Android/Chrome : menu ⋮ → *Ajouter à l'écran d'accueil* pour l'avoir e
 
 - Opacité réglable
 - 1 doigt : déplacer — 2 doigts : zoom et rotation
-- Verrouillage pour ne plus bouger l'image en dessinant
-- Rendus : photo, contraste, contours (détection Sobel en local), négatif
+- Verrou ancré : une fois verrouillée, l'image reste collée à la feuille même si le téléphone bouge (suivi de points dans la vidéo, en local). État affiché : *Ancré* ou *Suivi perdu*
+- Rendus : photo, contraste, contours en noir (détection Sobel en local), négatif
 - Miroir
 - L'écran reste allumé (Wake Lock)
 
-## Limite connue
+## Limites connues
 
-L'image est fixe par rapport à l'écran, pas à la feuille. Si le téléphone bouge, le dessin bouge avec. Il faut le caler (verre, pile de livres, support). Ancrer l'image sur la feuille demande ARCore, donc une app native.
+Le verrou ancré suit la feuille en translation, rotation et échelle (similitude), pas en perspective : si le téléphone s'incline beaucoup par rapport à la feuille, le calque glisse un peu. Il faut que la feuille ait quelques traits ou motifs à suivre ; une feuille blanche vide donne *Suivi perdu*. Caler le téléphone reste le plus précis.
 
 Aucune image ne quitte le téléphone : tout est traité dans le navigateur.
