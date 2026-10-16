@@ -5,12 +5,14 @@ time.sleep(1)
 URL="http://localhost:8765/"
 ok=lambda c,m: print(("✅ " if c else "❌ ")+m) or c
 results=[]
-async def ctx_page(b, delay=6000, deny=False, extra="", vp=(390,844)):
+ALL_ERRS=[]   # (scénario, erreurs) de toutes les pages ouvertes : contrôle global en fin de test
+async def ctx_page(b, delay=6000, deny=False, extra="", vp=(390,844), name=None):
     ctx = await b.new_context(viewport={"width":vp[0],"height":vp[1]}, has_touch=True, is_mobile=True)
     if not deny: await ctx.grant_permissions(["camera"], origin=URL.rstrip('/'))
     page = await ctx.new_page()
     errs=[]; page.on("pageerror", lambda e: errs.append(str(e)))
     page.on("console", lambda m: m.type=="error" and errs.append(m.text))
+    ALL_ERRS.append((name or f"page {len(ALL_ERRS)+1} ({vp[0]}×{vp[1]})", errs))
     js = ("navigator.mediaDevices.getUserMedia = () => new Promise((_,j)=>setTimeout(()=>j(new DOMException('no','NotAllowedError')),%d));" % delay) if deny else \
          ("const real=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices); navigator.mediaDevices.getUserMedia=c=>new Promise(r=>setTimeout(()=>r(real(c)),%d));" % delay)
     js += " const _c=navigator.mediaDevices.getUserMedia; window.__gum=0; navigator.mediaDevices.getUserMedia=c=>{window.__gum++; return _c.call(navigator.mediaDevices,c)};"
@@ -74,11 +76,20 @@ AUDIT = r"""(scope) => {
   const radius = targets.filter(e => parseFloat(getComputedStyle(e).borderRadius) > 0).map(e => e.id || e.textContent.trim());
   return { small, stretched, lowContrast, radius };
 }"""
+# Pixels opaques de l'image de contours : tous noirs (R, G, B < 40), aucun rose
+EDGE_PIXELS = r"""new Promise(res => { const im = new Image(); im.onload = () => {
+  const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+  const x = c.getContext('2d'); x.drawImage(im, 0, 0); const d = x.getImageData(0, 0, c.width, c.height).data;
+  let n = 0, notBlack = 0, pink = 0, max = 0;
+  for (let i = 0; i < d.length; i += 4) { if (d[i+3] < 128) continue; n++;
+    const m = Math.max(d[i], d[i+1], d[i+2]); max = Math.max(max, m);
+    if (m >= 40) notBlack++; if (d[i] > 180 && d[i+1] < 140 && d[i+2] > 100) pink++; }
+  res({ n, notBlack, pink, max }); }; im.src = art.src; })"""
 PANEL = "(()=>{const e=document.querySelector('#panel'), r=e.getBoundingClientRect(), c=getComputedStyle(e); return {l:r.left,r:r.right,t:r.top,b:r.bottom,w:r.width,bw:c.borderTopWidth,sh:c.boxShadow}})()"
 FONTS = r"""document.fonts.ready.then(()=>[...document.fonts].filter(f=>f.status=='loaded').map(f=>f.family.replace(/"/g,'')+' '+f.weight))"""
 
 async def layout(b, vp, name):
-    ctx,page,errs = await ctx_page(b, delay=0, vp=vp)
+    ctx,page,errs = await ctx_page(b, delay=0, vp=vp, name=name)
     W,H = vp
     show_resume = "v => { const r = document.querySelector('#resume'); if (r) r.hidden = !v; }"
     await page.evaluate(show_resume, True)   # aperçu de la carte Reprendre (branchée au point 5)
@@ -154,6 +165,9 @@ async def main():
             sty = await page.evaluate("(()=>{const c=getComputedStyle(document.querySelector('[data-mode=lines]'));return [c.backgroundColor,c.color]})()")
             results.append(ok(sty[0]!=sty[1] and 'rgba(0, 0, 0, 0)' not in sty[0], f"Bouton actif lisible (fond {sty[0]}, texte {sty[1]})"))
             results.append(ok(src.startswith("data:image/png"), "Mode Contours : image de contours générée"))
+            px = await page.evaluate(EDGE_PIXELS)
+            results.append(ok(px['n'] > 500 and px['notBlack'] == 0 and px['pink'] == 0,
+                              f"Contours en noir : {px['n']} pixels opaques, {px['notBlack']} non noirs, {px['pink']} roses (max RGB {px['max']})"))
             await page.screenshot(path="tests/test_contours.png")
 
             # Grille : suit la transformation de l'image
@@ -262,5 +276,9 @@ async def main():
     fonts = [f for f in os.listdir("fonts") if f.endswith(".woff2")] if os.path.isdir("fonts") else []
     results.append(ok(fonts and not missing and all("fonts/"+f in files for f in fonts),
                       f"sw.js : FILES complet, polices incluses {fonts}, manquants {missing or 'aucun'}"))
+    bad = [(n, e) for n, e in ALL_ERRS if e]
+    results.append(ok(not bad, f"Zéro erreur console / pageerror sur {len(ALL_ERRS)} pages" + ("" if not bad else f" : {bad}")))
     print(f"\n{sum(results)}/{len(results)} tests OK")
-asyncio.run(main()); srv.terminate()
+try: asyncio.run(main())
+finally: srv.terminate()
+sys.exit(0 if results and all(results) else 1)

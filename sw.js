@@ -1,4 +1,4 @@
-const C = 'calque-v3';
+const C = 'calque-v4';
 const FILES = ['./', 'index.html', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png',
   'fonts/bricolage-grotesque-latin-500-normal.woff2', 'fonts/bricolage-grotesque-latin-800-normal.woff2',
   'fonts/space-mono-latin-400-normal.woff2', 'fonts/space-mono-latin-700-normal.woff2'];

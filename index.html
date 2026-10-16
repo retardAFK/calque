@@ -374,7 +374,7 @@
         let m = Math.hypot(gx, gy) / 4;          // 0..~255
         m = m < 28 ? 0 : Math.min(255, m * 1.8); // seuil + gain
         const p = i * 4;
-        o[p] = 255; o[p+1] = 79; o[p+2] = 154;   // trait rose riso (--pink)
+        o[p] = 17; o[p+1] = 17; o[p+2] = 17;     // trait noir (--ink), quelle que soit la DA
         o[p+3] = m;                              // alpha = force du contour
       }
     }
